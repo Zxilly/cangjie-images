@@ -60,6 +60,15 @@ def test_split_path_diff_trailing_colon_is_stripped() -> None:
     assert diff.append == ()
 
 
+def test_split_path_diff_dedupes_prepend_entries() -> None:
+    # If envsetup ends up emitting duplicate entries (e.g. double-source),
+    # dedupe so the rendered ENV line stays tight.
+    before = "/usr/bin"
+    after = "/opt/cj/bin:/opt/cj/bin:/usr/bin"
+    diff = _split_path_diff(before, after)
+    assert diff.prepend == ("/opt/cj/bin",)
+
+
 def test_split_path_diff_falls_back_when_baseline_not_contiguous() -> None:
     before = "/a:/b"
     after = "/a:/c"  # /b dropped, /c added — no contiguous match

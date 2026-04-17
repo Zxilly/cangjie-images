@@ -20,7 +20,10 @@ EXCLUDE_SUFFIXES: tuple[str, ...] = (".dll", ".dll.a")
 
 _BASELINE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _BASELINE_HOME = "/root"
-_VOLATILE_ENV_KEYS: frozenset[str] = frozenset({"PWD", "OLDPWD", "SHLVL", "_", "HOME"})
+_ENVSETUP_PATH_VAR = "_CANGJIE_ENVSETUP_SCRIPT"
+_VOLATILE_ENV_KEYS: frozenset[str] = frozenset(
+    {"PWD", "OLDPWD", "SHLVL", "_", "HOME", _ENVSETUP_PATH_VAR}
+)
 # Vars treated as ':'-separated path lists. For these we emit a Dockerfile
 # ENV that preserves the base image's existing value via $KEY expansion
 # instead of clobbering it with whatever the runner happens to have.
@@ -118,6 +121,18 @@ def _split_path_list(value: str) -> tuple[str, ...]:
     return tuple(part for part in value.split(":") if part)
 
 
+def _dedupe(entries: tuple[str, ...]) -> tuple[str, ...]:
+    """Preserve order, drop duplicates (cheap defence against sloppy scripts)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in entries:
+        if entry in seen:
+            continue
+        seen.add(entry)
+        out.append(entry)
+    return tuple(out)
+
+
 def _split_path_diff(before: str, after: str) -> PathListDiff:
     """Find where ``before`` sits inside ``after`` and return the surrounding entries.
 
@@ -130,20 +145,20 @@ def _split_path_diff(before: str, after: str) -> PathListDiff:
     old_entries = _split_path_list(before)
     new_entries = _split_path_list(after)
     if not old_entries:
-        return PathListDiff(prepend=new_entries, append=())
+        return PathListDiff(prepend=_dedupe(new_entries), append=())
 
     old_len = len(old_entries)
     for i in range(len(new_entries) - old_len + 1):
         if new_entries[i : i + old_len] == old_entries:
             return PathListDiff(
-                prepend=new_entries[:i],
-                append=new_entries[i + old_len :],
+                prepend=_dedupe(new_entries[:i]),
+                append=_dedupe(new_entries[i + old_len :]),
             )
 
     # envsetup removed or reordered baseline entries. Keep only the
     # genuinely new ones as a prepend so we don't drop user-set baseline.
     added = tuple(p for p in new_entries if p not in old_entries)
-    return PathListDiff(prepend=added, append=())
+    return PathListDiff(prepend=_dedupe(added), append=())
 
 
 def capture_envsetup(sdk_home_on_host: Path) -> EnvDiff:
@@ -151,12 +166,18 @@ def capture_envsetup(sdk_home_on_host: Path) -> EnvDiff:
     if not envsetup.is_file():
         raise FileNotFoundError(f"envsetup.sh not found under {sdk_home_on_host}")
 
-    clean_env = {"HOME": _BASELINE_HOME, "PATH": _BASELINE_PATH}
+    # Pass the script path via an env var rather than string-interpolating it
+    # into the shell command, so paths containing quotes or $ don't break.
+    base_env = {
+        "HOME": _BASELINE_HOME,
+        "PATH": _BASELINE_PATH,
+        _ENVSETUP_PATH_VAR: str(envsetup),
+    }
 
     def _run(script: str) -> dict[str, str]:
         result = subprocess.run(
             ["bash", "--norc", "--noprofile", "-c", script],
-            env=clean_env,
+            env=base_env,
             capture_output=True,
             check=True,
         )
@@ -171,7 +192,7 @@ def capture_envsetup(sdk_home_on_host: Path) -> EnvDiff:
         return out
 
     before = _run("env -0")
-    after = _run(f'. "{envsetup}" >/dev/null 2>&1; env -0')
+    after = _run(f'. "${_ENVSETUP_PATH_VAR}" >/dev/null 2>&1; env -0')
 
     assignments: dict[str, str] = {}
     path_diffs: dict[str, PathListDiff] = {}
