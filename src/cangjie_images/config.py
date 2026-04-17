@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class BaseVariant:
+    name: str
+    image: str
+    family: str
+    default: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ArchVariant:
+    name: str
+    platform: str
+    manifest_key: str
+    nightly_arch: str
+    native_dir: str
+    runner: str
+
+
+DEFAULT_IMAGE_NAME = "zxilly/cangjie"
+STABLE_MANIFEST_URL = (
+    "https://raw.githubusercontent.com/Zxilly/"
+    "cangjie-version-manifest/refs/heads/master/versions.json"
+)
+NIGHTLY_RELEASE_API_URL = (
+    "https://api.gitcode.com/api/v5/repos/Cangjie/nightly_build/releases/latest"
+)
+NIGHTLY_DOWNLOAD_BASE_URL = (
+    "https://gitcode.com/Cangjie/nightly_build/releases/download"
+)
+NIGHTLY_TOKEN_ENV = "CANGJIE_NIGHTLY_API_KEY"
+DOCKER_HUB_PAGE_SIZE = 100
+USER_AGENT = "cangjie-images/0.1.0"
+
+BASE_VARIANTS: tuple[BaseVariant, ...] = (
+    BaseVariant("bookworm", "debian:bookworm", "debian", default=True),
+    BaseVariant("slim-bookworm", "debian:bookworm-slim", "debian"),
+    BaseVariant("trixie", "debian:trixie", "debian"),
+    BaseVariant("slim-trixie", "debian:trixie-slim", "debian"),
+    BaseVariant("openeuler", "openeuler/openeuler:24.03-lts-sp1", "openeuler"),
+)
+
+ARCH_VARIANTS: tuple[ArchVariant, ...] = (
+    ArchVariant(
+        name="amd64",
+        platform="linux/amd64",
+        manifest_key="linux-x64",
+        nightly_arch="x64",
+        native_dir="linux_x86_64_cjnative",
+        runner="ubuntu-24.04",
+    ),
+    ArchVariant(
+        name="arm64",
+        platform="linux/arm64",
+        manifest_key="linux-arm64",
+        nightly_arch="aarch64",
+        native_dir="linux_aarch64_cjnative",
+        runner="ubuntu-24.04-arm",
+    ),
+)
