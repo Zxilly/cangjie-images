@@ -97,7 +97,6 @@ jobs:
             CANGJIE_VERSION=${{ matrix.version }}
             CANGJIE_ARCHIVE_URL=${{ matrix.archive_url }}
             CANGJIE_ARCHIVE_SHA256=${{ matrix.archive_sha256 }}
-            CANGJIE_NATIVE_DIR=${{ matrix.native_dir }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.url=https://hub.docker.com/r/${{ env.IMAGE_NAME }}
