@@ -5,18 +5,19 @@ import os
 import re
 import subprocess
 import uuid
+from collections.abc import Mapping, Set as AbstractSet
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from cangjie_images.config import (
     ARCH_VARIANTS,
     BASE_VARIANTS,
     DEFAULT_IMAGE_NAME,
     DOCKER_HUB_PAGE_SIZE,
-    NIGHTLY_DOWNLOAD_BASE_URL,
     NIGHTLY_RELEASE_API_URL,
     NIGHTLY_TOKEN_ENV,
     STABLE_MANIFEST_URL,
@@ -24,6 +25,7 @@ from cangjie_images.config import (
 from cangjie_images.http_client import get_json, http_client
 from cangjie_images.models import (
     DigestMetadata,
+    DockerHubImage,
     DockerHubTagPage,
     NightlyRelease,
     PlatformArtifact,
@@ -32,6 +34,7 @@ from cangjie_images.models import (
 
 STABLE_VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 SLUG_RE = re.compile(r"[^a-z0-9]+")
+_SUPPORTED_ARCHES = frozenset(arch.name for arch in ARCH_VARIANTS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,13 +147,13 @@ def fetch_manifest(url: str = STABLE_MANIFEST_URL) -> StableManifest:
     return StableManifest.model_validate(payload)
 
 
-def fetch_existing_tags(image_name: str) -> set[str]:
+def fetch_existing_tags(image_name: str) -> dict[str, dict[str, str]]:
     namespace, repository = image_name.lower().split("/", 1)
     next_url: str | None = (
         f"https://hub.docker.com/v2/repositories/{namespace}/{repository}/tags"
         f"?page_size={DOCKER_HUB_PAGE_SIZE}"
     )
-    tags: set[str] = set()
+    tags: dict[str, dict[str, str]] = {}
 
     with http_client() as client:
         first_page = True
@@ -158,11 +161,11 @@ def fetch_existing_tags(image_name: str) -> set[str]:
             payload = get_json(client, next_url, allow_404=first_page)
             first_page = False
             if payload is None:
-                return set()
+                return {}
             page = DockerHubTagPage.model_validate(payload)
             for item in page.results:
                 if item.name:
-                    tags.add(item.name)
+                    tags[item.name] = _docker_hub_tag_state(item.images)
             next_url = page.next
 
     return tags
@@ -173,7 +176,7 @@ def fetch_latest_nightly(
     include_nightly: bool,
     api_url: str = NIGHTLY_RELEASE_API_URL,
     token_env: str = NIGHTLY_TOKEN_ENV,
-) -> tuple[str | None, str | None]:
+) -> tuple[NightlyRelease | None, str | None]:
     if not include_nightly:
         return None, None
 
@@ -185,10 +188,17 @@ def fetch_latest_nightly(
         with http_client() as client:
             payload = get_json(client, api_url, headers={"PRIVATE-TOKEN": token})
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(f"nightly API request failed with HTTP {exc.response.status_code}") from exc
+        return None, f"nightly API request failed with HTTP {exc.response.status_code}"
+    except httpx.HTTPError as exc:
+        return None, f"nightly API request failed: {exc}"
+    except ValueError as exc:
+        return None, f"nightly API returned invalid JSON: {exc}"
 
-    release = NightlyRelease.model_validate(payload)
-    return release.tag_name, None
+    try:
+        release = NightlyRelease.model_validate(payload)
+    except ValidationError:
+        return None, "nightly API response did not include the expected release assets"
+    return release, None
 
 
 def parse_stable_version(version: str) -> tuple[int, int, int] | None:
@@ -231,15 +241,19 @@ def compute_minor_alias_targets(manifest: StableManifest | dict[str, Any]) -> di
     return {version: tuple(sorted(serieses)) for version, serieses in aliases.items()}
 
 
-def nightly_download_info(version: str) -> dict[str, PlatformArtifact]:
+def nightly_download_info(release: NightlyRelease | dict[str, Any]) -> dict[str, PlatformArtifact]:
+    if not isinstance(release, NightlyRelease):
+        release = NightlyRelease.model_validate(release)
+
+    version = release.tag_name
+    assets_by_name = {asset.name: asset.browser_download_url for asset in release.assets}
     info: dict[str, PlatformArtifact] = {}
     for arch in ARCH_VARIANTS:
         filename = f"cangjie-sdk-linux-{arch.nightly_arch}-{version}.tar.gz"
-        info[arch.manifest_key] = PlatformArtifact(
-            url=f"{NIGHTLY_DOWNLOAD_BASE_URL}/{version}/{filename}",
-            sha256="",
-            name=filename,
-        )
+        url = assets_by_name.get(filename)
+        if not url:
+            continue
+        info[arch.manifest_key] = PlatformArtifact(url=url, sha256="", name=filename)
     return info
 
 
@@ -302,24 +316,90 @@ def _stable_release_sources(
     return releases
 
 
+def _docker_hub_tag_state(images: list[DockerHubImage]) -> dict[str, str]:
+    state: dict[str, str] = {}
+    for image in images:
+        arch = image.architecture.lower()
+        if image.os.lower() != "linux" or arch not in _SUPPORTED_ARCHES:
+            continue
+        if arch not in state or image.digest:
+            state[arch] = image.digest
+    return state
+
+
+def _normalize_tag_state(state: AbstractSet[str] | Mapping[str, str]) -> dict[str, str]:
+    if isinstance(state, Mapping):
+        return {
+            arch.lower(): digest
+            for arch, digest in state.items()
+            if arch.lower() in _SUPPORTED_ARCHES
+        }
+    return {arch.lower(): "" for arch in state if arch.lower() in _SUPPORTED_ARCHES}
+
+
+def _normalize_existing_tags(
+    existing_tags: AbstractSet[str] | Mapping[str, AbstractSet[str] | Mapping[str, str]],
+) -> dict[str, dict[str, str]]:
+    if isinstance(existing_tags, AbstractSet):
+        assumed_state = {arch: "" for arch in _SUPPORTED_ARCHES}
+        return {tag: dict(assumed_state) for tag in existing_tags}
+    return {tag: _normalize_tag_state(state) for tag, state in existing_tags.items()}
+
+
+def _expected_tag_state(
+    tag: str,
+    expected_arches: tuple[str, ...],
+    existing_tags: dict[str, dict[str, str]],
+) -> dict[str, str] | None:
+    state = existing_tags.get(tag)
+    if state is None:
+        return None
+    if any(arch not in state for arch in expected_arches):
+        return None
+    return {arch: state[arch] for arch in expected_arches}
+
+
+def _is_release_complete(
+    tags: tuple[str, ...],
+    expected_arches: tuple[str, ...],
+    existing_tags: dict[str, dict[str, str]],
+) -> bool:
+    if not expected_arches:
+        return False
+    reference = _expected_tag_state(tags[0], expected_arches, existing_tags)
+    if reference is None:
+        return False
+    for tag in tags[1:]:
+        if _expected_tag_state(tag, expected_arches, existing_tags) != reference:
+            return False
+    return True
+
+
 def build_plan(
     *,
     image_name: str = DEFAULT_IMAGE_NAME,
     include_nightly: bool = False,
     force: bool = False,
     manifest: StableManifest | dict[str, Any] | None = None,
-    existing_tags: set[str] | None = None,
-    nightly_version: str | None = None,
+    existing_tags: AbstractSet[str] | Mapping[str, AbstractSet[str] | Mapping[str, str]] | None = None,
+    nightly_release: NightlyRelease | dict[str, Any] | None = None,
     skipped_nightly_reason: str | None = None,
 ) -> PlanResult:
     if manifest is None:
         manifest = fetch_manifest()
     elif not isinstance(manifest, StableManifest):
         manifest = StableManifest.model_validate(manifest)
-    existing_tags = existing_tags if existing_tags is not None else fetch_existing_tags(image_name)
+    existing_tags = (
+        _normalize_existing_tags(existing_tags)
+        if existing_tags is not None
+        else fetch_existing_tags(image_name)
+    )
 
-    if include_nightly and nightly_version is None and skipped_nightly_reason is None:
-        nightly_version, skipped_nightly_reason = fetch_latest_nightly(include_nightly=True)
+    if nightly_release is not None and not isinstance(nightly_release, NightlyRelease):
+        nightly_release = NightlyRelease.model_validate(nightly_release)
+    if include_nightly and nightly_release is None and skipped_nightly_reason is None:
+        nightly_release, skipped_nightly_reason = fetch_latest_nightly(include_nightly=True)
+    nightly_version = nightly_release.tag_name if nightly_release else None
 
     latest_lts = manifest.channels["lts"].latest
     latest_sts = manifest.channels["sts"].latest
@@ -329,8 +409,15 @@ def build_plan(
     planned_releases: list[PlannedRelease] = []
 
     release_sources = _stable_release_sources(manifest)
-    if nightly_version:
-        release_sources.append(("nightly", nightly_version, nightly_download_info(nightly_version)))
+    if nightly_release is not None:
+        nightly_platforms = nightly_download_info(nightly_release)
+        if nightly_platforms:
+            release_sources.append(("nightly", nightly_release.tag_name, nightly_platforms))
+        else:
+            skipped_nightly_reason = (
+                skipped_nightly_reason
+                or f"nightly release {nightly_release.tag_name} has no supported assets"
+            )
 
     for channel, version, platforms in release_sources:
         for base in BASE_VARIANTS:
@@ -343,18 +430,17 @@ def build_plan(
                 latest_sts=latest_sts,
                 minor_aliases=minor_aliases,
             )
-            if not force and set(tags).issubset(existing_tags):
-                continue
 
             release_id = slugify(f"{channel}-{version}-{base.name}")
             release_arches: list[str] = []
+            release_builds: list[PlannedBuild] = []
 
             for arch in ARCH_VARIANTS:
                 info = platforms.get(arch.manifest_key)
                 if not info:
                     continue
                 release_arches.append(arch.name)
-                planned_builds.append(
+                release_builds.append(
                     PlannedBuild(
                         release_id=release_id,
                         cache_scope=slugify(f"{base.name}-{arch.name}"),
@@ -369,10 +455,13 @@ def build_plan(
                         archive_url=info.url,
                         archive_sha256=info.sha256,
                         native_dir=arch.native_dir,
-                    )
+                        )
                 )
 
             if release_arches:
+                if not force and _is_release_complete(tags, tuple(release_arches), existing_tags):
+                    continue
+                planned_builds.extend(release_builds)
                 planned_releases.append(
                     PlannedRelease(
                         release_id=release_id,
@@ -450,14 +539,31 @@ def merge_release_manifests(
 ) -> None:
     if not tags:
         raise ValueError(f"no tags provided for release_id={release_id}")
+    if not arches:
+        raise ValueError(f"no arches provided for release_id={release_id}")
 
-    digest_refs: list[str] = []
+    refs_by_arch: dict[str, str] = {}
+    expected_arches = set(arches)
     for path in sorted(digests_dir.glob(f"{release_id}-*.json")):
         metadata = DigestMetadata.model_validate_json(path.read_text(encoding="utf-8"))
-        digest_refs.append(f"{image_name}@{metadata.digest}")
+        if metadata.release_id != release_id:
+            raise ValueError(
+                f"digest metadata release_id mismatch: expected {release_id}, got {metadata.release_id}"
+            )
+        if metadata.arch in refs_by_arch:
+            raise ValueError(f"duplicate digest metadata found for {release_id}/{metadata.arch}")
+        if metadata.arch not in expected_arches:
+            raise ValueError(
+                f"unexpected digest metadata arch for {release_id}: {metadata.arch}"
+            )
+        refs_by_arch[metadata.arch] = f"{image_name}@{metadata.digest}"
 
-    if not digest_refs:
-        raise FileNotFoundError(f"no digest metadata found for release_id={release_id}")
+    missing_arches = [arch for arch in arches if arch not in refs_by_arch]
+    if missing_arches:
+        raise FileNotFoundError(
+            f"missing digest metadata for {release_id}: {', '.join(missing_arches)}"
+        )
+    digest_refs = [refs_by_arch[arch] for arch in arches]
 
     command = ["docker", "buildx", "imagetools", "create"]
     for tag in tags:
@@ -495,4 +601,3 @@ def append_publish_summary(
     ]
     with summary_path.open("a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
-

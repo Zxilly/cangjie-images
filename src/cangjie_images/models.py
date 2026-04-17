@@ -32,6 +32,14 @@ class StableManifest(_Strict):
 
 class DockerHubTag(_Strict):
     name: str
+    images: list["DockerHubImage"] = Field(default_factory=list)
+
+
+class DockerHubImage(_Strict):
+    architecture: str = ""
+    digest: str = ""
+    os: str = ""
+    variant: str | None = None
 
 
 class DockerHubTagPage(_Strict):
@@ -39,10 +47,16 @@ class DockerHubTagPage(_Strict):
     next: str | None = None
 
 
+class NightlyAsset(_Strict):
+    browser_download_url: str
+    name: str
+
+
 class NightlyRelease(_Strict):
     """Subset of the gitcode release API response we rely on."""
 
     tag_name: str
+    assets: list[NightlyAsset] = Field(default_factory=list)
 
 
 class DigestMetadata(_Strict):
