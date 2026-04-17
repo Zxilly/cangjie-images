@@ -70,6 +70,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Prepare build context
+        run: |
+          uv run cangjie-images prepare \
+            --archive-url "${{ matrix.archive_url }}" \
+            --archive-sha256 "${{ matrix.archive_sha256 }}" \
+            --base-image "${{ matrix.base_image }}" \
+            --base-family "${{ matrix.base_family }}" \
+            --channel "${{ matrix.channel }}" \
+            --version "${{ matrix.version }}" \
+            --output-dir build-context
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.0.0
 
@@ -83,39 +107,19 @@ jobs:
         id: build
         uses: docker/build-push-action@v7.1.0
         with:
-          context: .
-          file: ./Dockerfile
+          context: build-context
+          file: build-context/Dockerfile
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
           cache-from: type=gha,scope=${{ matrix.cache_scope }}
           cache-to: type=gha,scope=${{ matrix.cache_scope }},mode=max
-          build-args: |
-            BASE_IMAGE=${{ matrix.base_image }}
-            BASE_FAMILY=${{ matrix.base_family }}
-            CANGJIE_CHANNEL=${{ matrix.channel }}
-            CANGJIE_VERSION=${{ matrix.version }}
-            CANGJIE_ARCHIVE_URL=${{ matrix.archive_url }}
-            CANGJIE_ARCHIVE_SHA256=${{ matrix.archive_sha256 }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.url=https://hub.docker.com/r/${{ env.IMAGE_NAME }}
             org.opencontainers.image.version=${{ matrix.version }}
             io.cangjie.channel=${{ matrix.channel }}
             io.cangjie.base=${{ matrix.base }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version-file: .python-version
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-
-      - name: Install project metadata tool
-        run: uv sync --locked --dev
 
       - name: Write digest metadata
         run: |

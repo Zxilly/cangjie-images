@@ -13,6 +13,7 @@ from cangjie_images.planner import (
     write_github_outputs,
     write_summary,
 )
+from cangjie_images.prepare import prepare_build_context
 
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -85,6 +86,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Append a markdown summary to this path (defaults to $GITHUB_STEP_SUMMARY).",
     )
 
+    prepare_parser = subparsers.add_parser(
+        "prepare",
+        help="Download the SDK, capture envsetup.sh, and render a Dockerfile.",
+    )
+    prepare_parser.add_argument("--archive-url", required=True)
+    prepare_parser.add_argument("--archive-sha256", default="")
+    prepare_parser.add_argument("--base-image", required=True)
+    prepare_parser.add_argument("--base-family", required=True)
+    prepare_parser.add_argument("--channel", required=True)
+    prepare_parser.add_argument("--version", required=True)
+    prepare_parser.add_argument("--output-dir", type=Path, required=True)
+    prepare_parser.add_argument(
+        "--scripts-dir",
+        type=Path,
+        default=Path("scripts"),
+        help="Directory holding install-base-deps.sh (defaults to ./scripts).",
+    )
+
     return parser
 
 
@@ -126,6 +145,20 @@ def main(argv: list[str] | None = None) -> int:
             digest=args.digest,
         )
         print(path)
+        return 0
+
+    if args.command == "prepare":
+        result = prepare_build_context(
+            archive_url=args.archive_url,
+            archive_sha256=args.archive_sha256,
+            base_image=args.base_image,
+            base_family=args.base_family,
+            channel=args.channel,
+            version=args.version,
+            output_dir=args.output_dir,
+            scripts_dir=args.scripts_dir,
+        )
+        print(result.dockerfile)
         return 0
 
     if args.command == "merge":
