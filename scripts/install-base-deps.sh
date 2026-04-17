@@ -8,10 +8,18 @@ case "$family" in
     apt-get update
     apt-get install -y --no-install-recommends \
       bash \
+      binutils \
       ca-certificates \
       curl \
       findutils \
+      g++ \
+      gcc \
       git \
+      libc6-dev \
+      libssl-dev \
+      make \
+      openssl \
+      pkg-config \
       procps \
       tar \
       unzip \
@@ -22,10 +30,18 @@ case "$family" in
   openeuler)
     dnf install -y \
       bash \
+      binutils \
       ca-certificates \
       curl \
       findutils \
+      gcc \
+      gcc-c++ \
       git \
+      glibc-devel \
+      make \
+      openssl \
+      openssl-devel \
+      pkgconfig \
       procps-ng \
       tar \
       unzip \
