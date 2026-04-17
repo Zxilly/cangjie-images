@@ -4,12 +4,12 @@ import json
 import os
 import re
 import subprocess
-import urllib.error
-import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from cangjie_images.config import (
     ARCH_VARIANTS,
@@ -20,17 +20,18 @@ from cangjie_images.config import (
     NIGHTLY_RELEASE_API_URL,
     NIGHTLY_TOKEN_ENV,
     STABLE_MANIFEST_URL,
-    USER_AGENT,
+)
+from cangjie_images.http_client import get_json, http_client
+from cangjie_images.models import (
+    DigestMetadata,
+    DockerHubTagPage,
+    NightlyRelease,
+    PlatformArtifact,
+    StableManifest,
 )
 
 STABLE_VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
 SLUG_RE = re.compile(r"[^a-z0-9]+")
-
-
-@dataclass(frozen=True, slots=True)
-class DownloadInfo:
-    url: str
-    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,42 +138,32 @@ class PlanResult:
         return lines
 
 
-def _request_json(url: str, headers: dict[str, str] | None = None) -> Any:
-    request_headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
-    if headers:
-        request_headers.update(headers)
-    request = urllib.request.Request(url, headers=request_headers)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
-
-
-def fetch_manifest(url: str = STABLE_MANIFEST_URL) -> dict[str, Any]:
-    payload = _request_json(url)
-    if "channels" not in payload:
-        raise ValueError("manifest is missing channels")
-    return payload
+def fetch_manifest(url: str = STABLE_MANIFEST_URL) -> StableManifest:
+    with http_client() as client:
+        payload = get_json(client, url)
+    return StableManifest.model_validate(payload)
 
 
 def fetch_existing_tags(image_name: str) -> set[str]:
     namespace, repository = image_name.lower().split("/", 1)
-    url = (
+    next_url: str | None = (
         f"https://hub.docker.com/v2/repositories/{namespace}/{repository}/tags"
         f"?page_size={DOCKER_HUB_PAGE_SIZE}"
     )
     tags: set[str] = set()
 
-    while url:
-        try:
-            payload = _request_json(url)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
+    with http_client() as client:
+        first_page = True
+        while next_url:
+            payload = get_json(client, next_url, allow_404=first_page)
+            first_page = False
+            if payload is None:
                 return set()
-            raise
-        for item in payload.get("results", []):
-            name = item.get("name")
-            if name:
-                tags.add(name)
-        url = payload.get("next")
+            page = DockerHubTagPage.model_validate(payload)
+            for item in page.results:
+                if item.name:
+                    tags.add(item.name)
+            next_url = page.next
 
     return tags
 
@@ -191,14 +182,13 @@ def fetch_latest_nightly(
         return None, f"{token_env} is not configured"
 
     try:
-        payload = _request_json(api_url, headers={"PRIVATE-TOKEN": token})
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"nightly API request failed with HTTP {exc.code}") from exc
+        with http_client() as client:
+            payload = get_json(client, api_url, headers={"PRIVATE-TOKEN": token})
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(f"nightly API request failed with HTTP {exc.response.status_code}") from exc
 
-    version = payload.get("tag_name")
-    if not version:
-        raise RuntimeError("nightly API response is missing tag_name")
-    return version, None
+    release = NightlyRelease.model_validate(payload)
+    return release.tag_name, None
 
 
 def parse_stable_version(version: str) -> tuple[int, int, int] | None:
@@ -212,11 +202,13 @@ def parse_stable_version(version: str) -> tuple[int, int, int] | None:
     )
 
 
-def compute_minor_alias_targets(manifest: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+def compute_minor_alias_targets(manifest: StableManifest | dict[str, Any]) -> dict[str, tuple[str, ...]]:
+    if not isinstance(manifest, StableManifest):
+        manifest = StableManifest.model_validate(manifest)
     latest_by_series: dict[str, tuple[tuple[int, int, int], str, str]] = {}
 
     for channel in ("lts", "sts"):
-        versions = manifest["channels"][channel]["versions"]
+        versions = manifest.channels[channel].versions
         for version in versions:
             parsed = parse_stable_version(version)
             if parsed is None:
@@ -239,13 +231,14 @@ def compute_minor_alias_targets(manifest: dict[str, Any]) -> dict[str, tuple[str
     return {version: tuple(sorted(serieses)) for version, serieses in aliases.items()}
 
 
-def nightly_download_info(version: str) -> dict[str, DownloadInfo]:
-    info: dict[str, DownloadInfo] = {}
+def nightly_download_info(version: str) -> dict[str, PlatformArtifact]:
+    info: dict[str, PlatformArtifact] = {}
     for arch in ARCH_VARIANTS:
         filename = f"cangjie-sdk-linux-{arch.nightly_arch}-{version}.tar.gz"
-        info[arch.manifest_key] = DownloadInfo(
+        info[arch.manifest_key] = PlatformArtifact(
             url=f"{NIGHTLY_DOWNLOAD_BASE_URL}/{version}/{filename}",
             sha256="",
+            name=filename,
         )
     return info
 
@@ -291,10 +284,12 @@ def build_tags(
     return tuple(dict.fromkeys(tags))
 
 
-def _stable_release_sources(manifest: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
-    releases: list[tuple[str, str, dict[str, Any]]] = []
+def _stable_release_sources(
+    manifest: StableManifest,
+) -> list[tuple[str, str, dict[str, PlatformArtifact]]]:
+    releases: list[tuple[str, str, dict[str, PlatformArtifact]]] = []
     for channel in ("lts", "sts"):
-        versions = manifest["channels"][channel]["versions"]
+        versions = manifest.channels[channel].versions
 
         def sort_key(version: str) -> tuple[int, tuple[int, int, int], str]:
             parsed = parse_stable_version(version)
@@ -312,19 +307,22 @@ def build_plan(
     image_name: str = DEFAULT_IMAGE_NAME,
     include_nightly: bool = False,
     force: bool = False,
-    manifest: dict[str, Any] | None = None,
+    manifest: StableManifest | dict[str, Any] | None = None,
     existing_tags: set[str] | None = None,
     nightly_version: str | None = None,
     skipped_nightly_reason: str | None = None,
 ) -> PlanResult:
-    manifest = manifest or fetch_manifest()
+    if manifest is None:
+        manifest = fetch_manifest()
+    elif not isinstance(manifest, StableManifest):
+        manifest = StableManifest.model_validate(manifest)
     existing_tags = existing_tags if existing_tags is not None else fetch_existing_tags(image_name)
 
     if include_nightly and nightly_version is None and skipped_nightly_reason is None:
         nightly_version, skipped_nightly_reason = fetch_latest_nightly(include_nightly=True)
 
-    latest_lts = manifest["channels"]["lts"]["latest"]
-    latest_sts = manifest["channels"]["sts"]["latest"]
+    latest_lts = manifest.channels["lts"].latest
+    latest_sts = manifest.channels["sts"].latest
     minor_aliases = compute_minor_alias_targets(manifest)
 
     planned_builds: list[PlannedBuild] = []
@@ -368,8 +366,8 @@ def build_plan(
                         base_image=base.image,
                         channel=channel,
                         version=version,
-                        archive_url=info["url"] if isinstance(info, dict) else info.url,
-                        archive_sha256=info.get("sha256", "") if isinstance(info, dict) else info.sha256,
+                        archive_url=info.url,
+                        archive_sha256=info.sha256,
                         native_dir=arch.native_dir,
                     )
                 )
@@ -455,8 +453,8 @@ def merge_release_manifests(
 
     digest_refs: list[str] = []
     for path in sorted(digests_dir.glob(f"{release_id}-*.json")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        digest_refs.append(f"{image_name}@{payload['digest']}")
+        metadata = DigestMetadata.model_validate_json(path.read_text(encoding="utf-8"))
+        digest_refs.append(f"{image_name}@{metadata.digest}")
 
     if not digest_refs:
         raise FileNotFoundError(f"no digest metadata found for release_id={release_id}")

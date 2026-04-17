@@ -5,12 +5,10 @@ import os
 import shutil
 import subprocess
 import tarfile
-import textwrap
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from cangjie_images.config import USER_AGENT
+from cangjie_images.http_client import http_client, stream_download
 
 EXCLUDE_PREFIXES: tuple[str, ...] = (
     "cangjie/lib/windows_",
@@ -50,15 +48,10 @@ def _should_exclude(name: str) -> bool:
     return False
 
 
-def download_archive(url: str, dest: Path, *, chunk_size: int = 1024 * 1024) -> None:
+def download_archive(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=300) as response, dest.open("wb") as handle:
-        while True:
-            chunk = response.read(chunk_size)
-            if not chunk:
-                break
-            handle.write(chunk)
+    with http_client(timeout=None) as client, dest.open("wb") as handle:
+        stream_download(client, url, handle)
 
 
 def verify_sha256(path: Path, expected: str) -> None:

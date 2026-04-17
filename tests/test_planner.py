@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from cangjie_images.planner import build_plan, build_tags, compute_minor_alias_targets
 
 
@@ -88,6 +91,16 @@ def test_build_plan_skips_release_when_all_tags_exist() -> None:
     release_ids = {release.release_id for release in plan.publish_matrix}
     assert "lts-1-0-5-bookworm" not in release_ids
     assert "lts-1-0-4-bookworm" in release_ids
+
+
+def test_build_plan_rejects_invalid_manifest() -> None:
+    with pytest.raises(ValidationError):
+        build_plan(
+            image_name="zxilly/cangjie",
+            include_nightly=False,
+            manifest={"channels": {"lts": {"latest": 1.0, "versions": "oops"}}},
+            existing_tags=set(),
+        )
 
 
 def test_build_plan_adds_nightly_tags() -> None:

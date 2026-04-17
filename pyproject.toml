@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Automated planning and publishing for Cangjie Docker images."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "httpx>=0.28,<1",
+  "pydantic>=2.9,<3",
+  "tenacity>=9,<10",
+]
 
 [project.scripts]
 cangjie-images = "cangjie_images.cli:main"
