@@ -14,6 +14,8 @@
 
 # 支持的 tag 以及对应的 `Dockerfile`
 
+LTS（以当前最新 LTS `1.0.5` 为例）：
+
 -	[`1.0.5`, `1.0`, `lts`, `latest`, `1.0.5-bookworm`, `1.0-bookworm`, `lts-bookworm`](dockerfiles/1.0.5/bookworm/Dockerfile)
 -	[`1.0.5-slim-bookworm`, `1.0-slim-bookworm`, `lts-slim-bookworm`](dockerfiles/1.0.5/slim-bookworm/Dockerfile)
 -	[`1.0.5-trixie`, `1.0-trixie`, `lts-trixie`](dockerfiles/1.0.5/trixie/Dockerfile)
@@ -23,6 +25,20 @@
 -	[`1.0.5-openeuler-24.03`, `1.0-openeuler-24.03`, `lts-openeuler-24.03`](dockerfiles/1.0.5/openeuler-24.03/Dockerfile)
 -	[`1.0.5-openeuler-22.03`, `1.0-openeuler-22.03`, `lts-openeuler-22.03`](dockerfiles/1.0.5/openeuler-22.03/Dockerfile)
 -	[`1.0.5-openeuler-20.03`, `1.0-openeuler-20.03`, `lts-openeuler-20.03`](dockerfiles/1.0.5/openeuler-20.03/Dockerfile)
+
+STS（以当前最新 STS `1.1.0-beta.24` 为例）：
+
+-	[`1.1.0-beta.24`, `sts`, `1.1.0-beta.24-bookworm`, `sts-bookworm`](dockerfiles/1.1.0-beta.24/bookworm/Dockerfile)
+-	[`1.1.0-beta.24-slim-bookworm`, `sts-slim-bookworm`](dockerfiles/1.1.0-beta.24/slim-bookworm/Dockerfile)
+-	[`1.1.0-beta.24-trixie`, `sts-trixie`](dockerfiles/1.1.0-beta.24/trixie/Dockerfile)
+-	[`1.1.0-beta.24-slim-trixie`, `sts-slim-trixie`](dockerfiles/1.1.0-beta.24/slim-trixie/Dockerfile)
+-	[`1.1.0-beta.24-bullseye`, `sts-bullseye`](dockerfiles/1.1.0-beta.24/bullseye/Dockerfile)
+-	[`1.1.0-beta.24-slim-bullseye`, `sts-slim-bullseye`](dockerfiles/1.1.0-beta.24/slim-bullseye/Dockerfile)
+-	[`1.1.0-beta.24-openeuler-24.03`, `sts-openeuler-24.03`](dockerfiles/1.1.0-beta.24/openeuler-24.03/Dockerfile)
+-	[`1.1.0-beta.24-openeuler-22.03`, `sts-openeuler-22.03`](dockerfiles/1.1.0-beta.24/openeuler-22.03/Dockerfile)
+-	[`1.1.0-beta.24-openeuler-20.03`, `sts-openeuler-20.03`](dockerfiles/1.1.0-beta.24/openeuler-20.03/Dockerfile)
+
+Nightly：
 -	[`nightly`, `nightly-<version>`, `nightly-bookworm`, `nightly-<version>-bookworm`](dockerfiles/nightly/bookworm/Dockerfile)
 -	[`nightly-slim-bookworm`, `nightly-<version>-slim-bookworm`](dockerfiles/nightly/slim-bookworm/Dockerfile)
 -	[`nightly-trixie`, `nightly-<version>-trixie`](dockerfiles/nightly/trixie/Dockerfile)
