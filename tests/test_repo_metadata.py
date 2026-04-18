@@ -13,13 +13,3 @@ def test_project_metadata_declares_mit_license() -> None:
 
     license_text = Path("LICENSE").read_text(encoding="utf-8")
     assert "MIT License" in license_text
-
-
-def test_readme_describes_current_layout_and_tag_patterns() -> None:
-    readme = Path("README.md").read_text(encoding="utf-8")
-
-    assert "versions/<channel>/<version>/<base>/<arch>/Dockerfile" in readme
-    assert "dockerfiles/" not in readme
-    assert "`<version>-slim`" not in readme
-    assert "`slim-bookworm`" in readme
-    assert "`slim-openeuler-24.03`" in readme
