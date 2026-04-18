@@ -1,102 +1,39 @@
 from __future__ import annotations
 
-import cangjie_images.prepare as prepare
-from cangjie_images.prepare import (
-    EnvDiff,
-    PathListDiff,
-    _build_smoke_test_env,
-    _split_path_diff,
-    rewrite_paths,
-)
+import pytest
+
+from cangjie_images.prepare import detect_backend
 
 
-def test_split_path_diff_finds_baseline_in_middle() -> None:
-    before = "/usr/bin:/bin"
-    after = "/opt/cangjie/bin:/opt/cangjie/tools/bin:/usr/bin:/bin:/root/.cjpm/bin"
-    diff = _split_path_diff(before, after)
-    assert diff.prepend == ("/opt/cangjie/bin", "/opt/cangjie/tools/bin")
-    assert diff.append == ("/root/.cjpm/bin",)
+def test_detect_backend_reads_runtime_lib_dir(tmp_path) -> None:
+    sdk_home = tmp_path / "cangjie"
+    (sdk_home / "runtime" / "lib" / "linux_x86_64_cjnative").mkdir(parents=True)
+    assert detect_backend(sdk_home, "linux_x86_64") == "cjnative"
 
 
-def test_split_path_diff_baseline_only_prepended() -> None:
-    diff = _split_path_diff("/usr/bin", "/opt/cj/bin:/usr/bin")
-    assert diff.prepend == ("/opt/cj/bin",)
-    assert diff.append == ()
+def test_detect_backend_handles_llvm(tmp_path) -> None:
+    sdk_home = tmp_path / "cangjie"
+    (sdk_home / "runtime" / "lib" / "linux_aarch64_llvm").mkdir(parents=True)
+    (sdk_home / "runtime" / "lib" / "linux_x86_64_llvm").mkdir(parents=True)
+    # Each probe is scoped to one arch's prefix, so sibling arches don't collide.
+    assert detect_backend(sdk_home, "linux_aarch64") == "llvm"
 
 
-def test_split_path_diff_empty_baseline_treats_all_as_prepend() -> None:
-    diff = _split_path_diff("", "/opt/cj/runtime/lib:/opt/cj/tools/lib")
-    assert diff.prepend == ("/opt/cj/runtime/lib", "/opt/cj/tools/lib")
-    assert diff.append == ()
+def test_detect_backend_raises_when_missing(tmp_path) -> None:
+    sdk_home = tmp_path / "cangjie"
+    (sdk_home / "runtime" / "lib").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="no linux_x86_64_"):
+        detect_backend(sdk_home, "linux_x86_64")
 
 
-def test_split_path_diff_trailing_colon_is_stripped() -> None:
-    diff = _split_path_diff("", "/opt/cj/lib:")
-    assert diff.prepend == ("/opt/cj/lib",)
-    assert diff.append == ()
+def test_detect_backend_rejects_ambiguous_layout(tmp_path) -> None:
+    sdk_home = tmp_path / "cangjie"
+    (sdk_home / "runtime" / "lib" / "linux_x86_64_cjnative").mkdir(parents=True)
+    (sdk_home / "runtime" / "lib" / "linux_x86_64_llvm").mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="multiple backends"):
+        detect_backend(sdk_home, "linux_x86_64")
 
 
-def test_split_path_diff_dedupes_prepend_entries() -> None:
-    before = "/usr/bin"
-    after = "/opt/cj/bin:/opt/cj/bin:/usr/bin"
-    diff = _split_path_diff(before, after)
-    assert diff.prepend == ("/opt/cj/bin",)
-
-
-def test_split_path_diff_falls_back_when_baseline_not_contiguous() -> None:
-    before = "/a:/b"
-    after = "/a:/c"
-    diff = _split_path_diff(before, after)
-    assert diff.prepend == ("/c",)
-    assert diff.append == ()
-
-
-def test_rewrite_paths_replaces_host_prefix() -> None:
-    env = EnvDiff(
-        assignments={"CANGJIE_HOME": "/tmp/stage/opt/cangjie"},
-        path_diffs={
-            "PATH": PathListDiff(
-                prepend=("/tmp/stage/opt/cangjie/bin", "/tmp/stage/opt/cangjie/tools/bin"),
-                append=("/root/.cjpm/bin",),
-            ),
-            "LD_LIBRARY_PATH": PathListDiff(
-                prepend=("/tmp/stage/opt/cangjie/runtime/lib/linux_x86_64_cjnative",),
-                append=(),
-            ),
-        },
-    )
-    result = rewrite_paths(env, "/tmp/stage/opt/cangjie", "/opt/cangjie")
-    assert result.assignments["CANGJIE_HOME"] == "/opt/cangjie"
-    assert result.path_diffs["PATH"].prepend == ("/opt/cangjie/bin", "/opt/cangjie/tools/bin")
-    assert result.path_diffs["PATH"].append == ("/root/.cjpm/bin",)
-    assert result.path_diffs["LD_LIBRARY_PATH"].prepend == (
-        "/opt/cangjie/runtime/lib/linux_x86_64_cjnative",
-    )
-
-
-def test_build_smoke_test_env_uses_clean_baseline(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("PATH", "/host/tools:/usr/bin")
-    monkeypatch.setenv("LD_LIBRARY_PATH", "/host/lib")
-    monkeypatch.setenv("HOME", "/host/home")
-
-    env = _build_smoke_test_env(
-        tmp_path / "sdk-root" / "opt" / "cangjie",
-        EnvDiff(
-            assignments={"LD_LIBRARY_PATH": "/opt/cangjie/runtime/lib", "FOO": "bar"},
-            path_diffs={
-                "PATH": PathListDiff(
-                    prepend=("/opt/cangjie/bin", "/opt/cangjie/tools/bin"),
-                    append=("/root/.cjpm/bin",),
-                )
-            },
-        ),
-    )
-
-    assert env["PATH"] == (
-        f"/opt/cangjie/bin:/opt/cangjie/tools/bin:{prepare._BASELINE_PATH}:/root/.cjpm/bin"
-    )
-    assert env["LD_LIBRARY_PATH"] == "/opt/cangjie/runtime/lib"
-    assert env["HOME"] == prepare._BASELINE_HOME
-    assert env["FOO"] == "bar"
-    assert "/host/tools" not in env["PATH"]
-    assert env["LD_LIBRARY_PATH"] != "/host/lib"
+def test_detect_backend_missing_runtime_lib_dir(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError):
+        detect_backend(tmp_path / "cangjie", "linux_x86_64")

@@ -26,6 +26,7 @@ class ArchVariant:
     manifest_key: str
     nightly_arch: str
     runner: str
+    native_lib_token: str
 
 
 DEFAULT_IMAGE_NAME = "zxilly/cangjie"
@@ -59,6 +60,7 @@ ARCH_VARIANTS: tuple[ArchVariant, ...] = (
         manifest_key="linux-x64",
         nightly_arch="x64",
         runner="ubuntu-24.04",
+        native_lib_token="linux_x86_64",
     ),
     ArchVariant(
         name="arm64",
@@ -66,5 +68,6 @@ ARCH_VARIANTS: tuple[ArchVariant, ...] = (
         manifest_key="linux-arm64",
         nightly_arch="aarch64",
         runner="ubuntu-24.04-arm",
+        native_lib_token="linux_aarch64",
     ),
 )

@@ -37,7 +37,7 @@ from cangjie_images.models import (
     PlatformArtifact,
     StableManifest,
 )
-from cangjie_images.prepare import CapturedArch, capture_sources
+from cangjie_images.prepare import ArchSource, capture_sources
 from cangjie_images.templates import render_dockerfile
 
 STABLE_VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)$")
@@ -459,36 +459,36 @@ def _render_nightly_contexts(
 ) -> dict[tuple[str, Arch], Path]:
     """Render nightly Dockerfiles per (base, arch) under ``output_root``.
 
-    Captures envsetup once per arch and writes ``<output_root>/<slug>/Dockerfile``
+    Probes SDK layout once per arch and writes ``<output_root>/<slug>/Dockerfile``
     for every (base, arch) combination. Returns {(base_name, arch): context_dir}.
     """
     selected = bases if bases is not None else BASE_VARIANTS
     if not selected:
         return {}
 
-    captured: list[CapturedArch] = capture_sources(platforms, run_smoke_test=True)
-    if not captured:
+    sources: list[ArchSource] = capture_sources(platforms, run_smoke_test=True)
+    if not sources:
         return {}
 
     version = nightly_release.tag_name
     contexts: dict[tuple[str, Arch], Path] = {}
     for base in selected:
-        for cap in captured:
-            context = output_root / slugify(f"nightly-{version}-{base.name}-{cap.source.arch}")
+        for source in sources:
+            context = output_root / slugify(f"nightly-{version}-{base.name}-{source.arch}")
             context.mkdir(parents=True, exist_ok=True)
             (context / "Dockerfile").write_text(
                 render_dockerfile(
+                    base_name=base.name,
                     base_image=base.image,
                     base_family=base.family,
                     channel="nightly",
                     version=version,
-                    arch=cap.source.arch,
-                    env_diff=cap.env_diff,
-                    source=cap.source,
+                    arch=source.arch,
+                    source=source,
                 ),
                 encoding="utf-8",
             )
-            contexts[(base.name, cap.source.arch)] = context
+            contexts[(base.name, source.arch)] = context
     return contexts
 
 

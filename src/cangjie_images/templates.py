@@ -3,8 +3,8 @@ from __future__ import annotations
 from importlib import resources
 from typing import TYPE_CHECKING, get_args
 
-from cangjie_images.config import Arch, BaseFamily, Channel
-from cangjie_images.prepare import ArchSource, EnvDiff, PathListDiff
+from cangjie_images.config import ARCH_VARIANTS, Arch, BaseFamily, Channel
+from cangjie_images.prepare import ArchSource
 
 if TYPE_CHECKING:
     from jinja2 import Template
@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 __all__ = ["ArchSource", "render_dockerfile"]
 
 _EXTRACTOR_IMAGE = "debian:bookworm-slim"
+_REPO_URL = "https://github.com/Zxilly/cangjie-images"
+_DOCS_URL = "https://github.com/Zxilly/cangjie-images#readme"
 
 _DEBIAN_PACKAGES: tuple[str, ...] = (
     "bash",
@@ -65,6 +67,7 @@ _TAR_EXCLUDES: tuple[str, ...] = (
 )
 
 _SUPPORTED_FAMILIES: frozenset[str] = frozenset(get_args(BaseFamily))
+_NATIVE_LIB_TOKEN_BY_ARCH: dict[Arch, str] = {a.name: a.native_lib_token for a in ARCH_VARIANTS}
 
 # Pre-joined line continuations keep the Jinja template free of loop.last
 # bookkeeping — the template just interpolates a ready-to-emit block.
@@ -94,42 +97,14 @@ def _get_template() -> Template:
     return _template
 
 
-# Dockerfile ENV double-quote escaping. Scalar values must additionally
-# escape `$` so literal dollar signs aren't interpreted as ARG/ENV refs;
-# path-like values keep `$PATH`/`$LD_LIBRARY_PATH` unescaped so they
-# expand against the base image's inherited value at build time.
-_SCALAR_ESCAPE = str.maketrans({"\\": r"\\", '"': r"\"", "$": r"\$"})
-_PATH_ESCAPE = str.maketrans({"\\": r"\\", '"': r"\""})
-
-
-def _format_scalar_env(key: str, value: str) -> str:
-    return f'ENV {key}="{value.translate(_SCALAR_ESCAPE)}"'
-
-
-def _format_path_env(key: str, diff: PathListDiff) -> str:
-    parts: list[str] = []
-    if diff.prepend:
-        parts.append(":".join(diff.prepend))
-    parts.append(f"${key}")
-    if diff.append:
-        parts.append(":".join(diff.append))
-    return f'ENV {key}="{":".join(parts).translate(_PATH_ESCAPE)}"'
-
-
-def _env_lines(env_diff: EnvDiff) -> list[str]:
-    lines = [_format_scalar_env(k, v) for k, v in sorted(env_diff.assignments.items())]
-    lines.extend(_format_path_env(k, d) for k, d in sorted(env_diff.path_diffs.items()))
-    return lines
-
-
 def render_dockerfile(
     *,
+    base_name: str,
     base_image: str,
     base_family: BaseFamily,
     channel: Channel,
     version: str,
     arch: Arch,
-    env_diff: EnvDiff,
     source: ArchSource,
 ) -> str:
     """Render a fully self-contained single-arch Dockerfile via Jinja2."""
@@ -137,6 +112,8 @@ def render_dockerfile(
         raise ValueError(f"source arch mismatch: expected {arch}, got {source.arch}")
     if not source.sha256:
         raise ValueError(f"sha256 required for arch {arch}")
+    if not source.backend:
+        raise ValueError(f"backend required for arch {arch}")
     if base_family not in _SUPPORTED_FAMILIES:
         raise ValueError(f"unsupported base family: {base_family}")
 
@@ -144,12 +121,15 @@ def render_dockerfile(
         channel=channel,
         version=version,
         arch=arch,
+        base_name=base_name,
         base_image=base_image,
         base_family=base_family,
         source=source,
-        env_block="\n".join(_env_lines(env_diff)),
+        native_lib_token=_NATIVE_LIB_TOKEN_BY_ARCH[arch],
         debian_packages_block=_DEBIAN_PACKAGES_BLOCK,
         openeuler_packages_block=_OPENEULER_PACKAGES_BLOCK,
         tar_excludes_block=_TAR_EXCLUDES_BLOCK,
         extractor_image=_EXTRACTOR_IMAGE,
+        repo_url=_REPO_URL,
+        docs_url=_DOCS_URL,
     )

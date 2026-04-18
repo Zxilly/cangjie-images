@@ -99,28 +99,28 @@ def generate(
             if not pending:
                 continue
 
-            captured = capture_sources(platforms, run_smoke_test=run_smoke_test)
-            if not captured:
+            sources = capture_sources(platforms, run_smoke_test=run_smoke_test)
+            if not sources:
                 for _, target in pending:
                     result.skipped_no_sources.append(target)
                 continue
 
-            env_by_arch = {cap.source.arch: cap for cap in captured}
+            source_by_arch = {s.arch: s for s in sources}
             for base, target in pending:
-                cap = env_by_arch.get(target.arch)
-                if cap is None:
+                source = source_by_arch.get(target.arch)
+                if source is None:
                     result.skipped_no_sources.append(target)
                     continue
                 target.path.parent.mkdir(parents=True, exist_ok=True)
                 target.path.write_text(
                     render_dockerfile(
+                        base_name=base.name,
                         base_image=base.image,
                         base_family=base.family,
                         channel=channel_name,
                         version=version,
                         arch=target.arch,
-                        env_diff=cap.env_diff,
-                        source=cap.source,
+                        source=source,
                     ),
                     encoding="utf-8",
                 )
