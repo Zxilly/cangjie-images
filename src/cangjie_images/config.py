@@ -47,7 +47,9 @@ BASE_VARIANTS: tuple[BaseVariant, ...] = (
     BaseVariant("slim-bullseye", "debian:bullseye-slim", "debian"),
     BaseVariant("trixie", "debian:trixie", "debian"),
     BaseVariant("slim-trixie", "debian:trixie-slim", "debian"),
-    BaseVariant("openeuler", "openeuler/openeuler:24.03-lts-sp1", "openeuler"),
+    BaseVariant("openeuler-24.03", "openeuler/openeuler:24.03-lts-sp2", "openeuler"),
+    BaseVariant("openeuler-22.03", "openeuler/openeuler:22.03-lts-sp4", "openeuler"),
+    BaseVariant("openeuler-20.03", "openeuler/openeuler:20.03-lts-sp4", "openeuler"),
 )
 
 ARCH_VARIANTS: tuple[ArchVariant, ...] = (
