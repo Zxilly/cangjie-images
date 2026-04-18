@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cangjie_images.config import DEFAULT_IMAGE_NAME
 from cangjie_images.planner import (
@@ -13,8 +14,9 @@ from cangjie_images.planner import (
     write_github_outputs,
     write_summary,
 )
-from cangjie_images.prepare import prepare_build_context
 
+if TYPE_CHECKING:
+    from cangjie_images.generator import GenerationResult
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -28,12 +30,29 @@ def _env_path(name: str) -> Path | None:
     return Path(value) if value else None
 
 
+def _env_str(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
+    return value or None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Plan and publish Cangjie Docker images.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan_parser = subparsers.add_parser("plan", help="Generate a publish plan.")
     plan_parser.add_argument("--image", default=DEFAULT_IMAGE_NAME, help="Docker image name.")
+    plan_parser.add_argument(
+        "--versions-root",
+        type=Path,
+        default=Path("versions"),
+        help="Directory containing committed Dockerfiles (defaults to ./versions).",
+    )
+    plan_parser.add_argument(
+        "--nightly-context-root",
+        type=Path,
+        default=Path(".build-context"),
+        help="Directory where nightly Dockerfiles are rendered (defaults to ./.build-context).",
+    )
     plan_parser.add_argument(
         "--include-nightly",
         action="store_true",
@@ -61,6 +80,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write a markdown summary to this path (defaults to $GITHUB_STEP_SUMMARY).",
     )
 
+    gen_parser = subparsers.add_parser(
+        "generate",
+        help="Render committed Dockerfiles for stable releases into versions/<channel>/<version>/<base>/Dockerfile.",
+    )
+    gen_parser.add_argument(
+        "--versions-root",
+        type=Path,
+        default=Path("versions"),
+        help="Directory to write Dockerfiles into (defaults to ./versions).",
+    )
+    gen_parser.add_argument(
+        "--force",
+        action="store_true",
+        default=_env_bool("CANGJIE_GENERATE_FORCE"),
+        help="Overwrite every committed Dockerfile. Also enabled via CANGJIE_GENERATE_FORCE.",
+    )
+    gen_parser.add_argument(
+        "--force-version",
+        default=_env_str("CANGJIE_GENERATE_FORCE_VERSION"),
+        help="Overwrite Dockerfiles for a single version (e.g. 1.0.5). "
+        "Also settable via CANGJIE_GENERATE_FORCE_VERSION.",
+    )
+    gen_parser.add_argument(
+        "--skip-smoke-test",
+        action="store_true",
+        help="Skip running cjc/cjpm --version on the captured SDK. Required on runners that "
+        "cannot execute the reference arch (e.g. arm64-only hosts).",
+    )
+    gen_parser.add_argument(
+        "--summary",
+        type=Path,
+        default=_env_path("GITHUB_STEP_SUMMARY"),
+        help="Append a markdown summary to this path (defaults to $GITHUB_STEP_SUMMARY).",
+    )
+
     digest_parser = subparsers.add_parser(
         "write-digest",
         help="Write digest metadata for a build job artifact.",
@@ -86,32 +140,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Append a markdown summary to this path (defaults to $GITHUB_STEP_SUMMARY).",
     )
 
-    prepare_parser = subparsers.add_parser(
-        "prepare",
-        help="Download the SDK, capture envsetup.sh, and render a Dockerfile.",
-    )
-    prepare_parser.add_argument("--archive-url", required=True)
-    prepare_parser.add_argument("--archive-sha256", default="")
-    prepare_parser.add_argument("--base-image", required=True)
-    prepare_parser.add_argument("--base-family", required=True)
-    prepare_parser.add_argument("--channel", required=True)
-    prepare_parser.add_argument("--version", required=True)
-    prepare_parser.add_argument("--output-dir", type=Path, required=True)
-    prepare_parser.add_argument(
-        "--scripts-dir",
-        type=Path,
-        default=Path("scripts"),
-        help="Directory holding install-base-deps.sh (defaults to ./scripts).",
-    )
-
     return parser
 
 
-def _parse_string_array(raw: str, option: str) -> list[str]:
+def _parse_string_array(raw: str, option: str, parser: argparse.ArgumentParser) -> list[str]:
     value = json.loads(raw)
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise SystemExit(f"{option} must be a JSON array of strings")
-    return value
+        parser.error(f"{option} must be a JSON array of strings")
+    return value  # type: ignore[return-value]
+
+
+def _write_generate_summary(
+    result: GenerationResult,
+    summary_path: Path,
+    *,
+    force: bool,
+    force_version: str | None,
+) -> None:
+    lines = [
+        "## Cangjie Dockerfile Generation",
+        "",
+        f"- Force: `{force}`",
+        f"- Force version: `{force_version or '-'}`",
+        f"- Written: `{len(result.written)}`",
+        f"- Skipped (existing): `{len(result.skipped_existing)}`",
+        f"- Skipped (no sources): `{len(result.skipped_no_sources)}`",
+    ]
+    if result.written:
+        lines.extend(["", "### Written", ""])
+        for entry in result.written:
+            lines.append(
+                f"- `{entry.channel}/{entry.version}/{entry.base}/{entry.arch}` → `{entry.path}`"
+            )
+    with summary_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
             image_name=args.image,
             include_nightly=args.include_nightly,
             force=args.force,
+            versions_root=args.versions_root,
+            nightly_context_root=args.nightly_context_root,
         )
         if args.github_output:
             write_github_outputs(plan, args.github_output)
@@ -137,6 +201,27 @@ def main(argv: list[str] | None = None) -> int:
             print(plan.as_json())
         return 0
 
+    if args.command == "generate":
+        from cangjie_images.generator import generate
+
+        force_version = args.force_version.strip() if args.force_version else None
+        result = generate(
+            versions_root=args.versions_root,
+            force=args.force,
+            force_version=force_version or None,
+            run_smoke_test=not args.skip_smoke_test,
+        )
+        if args.summary:
+            _write_generate_summary(
+                result, args.summary, force=args.force, force_version=force_version
+            )
+        print(
+            f"Wrote {len(result.written)} Dockerfiles; "
+            f"skipped {len(result.skipped_existing)} existing, "
+            f"{len(result.skipped_no_sources)} missing sources."
+        )
+        return 0
+
     if args.command == "write-digest":
         path = write_digest_metadata(
             output_dir=args.output_dir,
@@ -147,23 +232,9 @@ def main(argv: list[str] | None = None) -> int:
         print(path)
         return 0
 
-    if args.command == "prepare":
-        result = prepare_build_context(
-            archive_url=args.archive_url,
-            archive_sha256=args.archive_sha256,
-            base_image=args.base_image,
-            base_family=args.base_family,
-            channel=args.channel,
-            version=args.version,
-            output_dir=args.output_dir,
-            scripts_dir=args.scripts_dir,
-        )
-        print(result.dockerfile)
-        return 0
-
     if args.command == "merge":
-        tags = _parse_string_array(args.tags_json, "--tags-json")
-        arches = _parse_string_array(args.arches_json, "--arches-json")
+        tags = _parse_string_array(args.tags_json, "--tags-json", parser)
+        arches = _parse_string_array(args.arches_json, "--arches-json", parser)
         merge_release_manifests(
             image_name=args.image,
             release_id=args.release_id,

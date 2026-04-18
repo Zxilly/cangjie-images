@@ -32,7 +32,7 @@ class StableManifest(_Strict):
 
 class DockerHubTag(_Strict):
     name: str
-    images: list["DockerHubImage"] = Field(default_factory=list)
+    images: list[DockerHubImage] = Field(default_factory=list)
 
 
 class DockerHubImage(_Strict):

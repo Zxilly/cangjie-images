@@ -2,32 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import subprocess
 import tarfile
+import tempfile
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from cangjie_images.config import ARCH_VARIANTS, Arch, ArchVariant
 from cangjie_images.http_client import http_client, stream_download
-
-EXCLUDE_PREFIXES: tuple[str, ...] = (
-    "cangjie/lib/windows_",
-    "cangjie/runtime/lib/windows_",
-    "cangjie/modules/windows_",
-    "cangjie/third_party/mingw",
-)
-EXCLUDE_SUFFIXES: tuple[str, ...] = (".dll", ".dll.a")
+from cangjie_images.models import PlatformArtifact
 
 _BASELINE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _BASELINE_HOME = "/root"
 _ENVSETUP_PATH_VAR = "_CANGJIE_ENVSETUP_SCRIPT"
-_BUILD_CONTEXT_MARKER = ".cangjie-images-build-context"
 _VOLATILE_ENV_KEYS: frozenset[str] = frozenset(
     {"PWD", "OLDPWD", "SHLVL", "_", "HOME", _ENVSETUP_PATH_VAR}
 )
-# Vars treated as ':'-separated path lists. For these we emit a Dockerfile
-# ENV that preserves the base image's existing value via $KEY expansion
-# instead of clobbering it with whatever the runner happens to have.
 _PATH_LIKE_KEYS: frozenset[str] = frozenset(
     {"PATH", "LD_LIBRARY_PATH", "PKG_CONFIG_PATH", "CPATH", "LIBRARY_PATH", "MANPATH"}
 )
@@ -35,8 +27,6 @@ _PATH_LIKE_KEYS: frozenset[str] = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class PathListDiff:
-    """Prefix and suffix entries added around a base value of a :-separated list."""
-
     prepend: tuple[str, ...]
     append: tuple[str, ...]
 
@@ -47,50 +37,17 @@ class PathListDiff:
 
 @dataclass(frozen=True, slots=True)
 class EnvDiff:
-    """Structured diff between baseline and envsetup-applied environments."""
-
-    # Scalar KEY=VALUE assignments (new vars or non-list vars with a changed value).
     assignments: dict[str, str]
-    # Path-list vars that existed in the baseline: expressed as $KEY-preserving prepend/append.
     path_diffs: dict[str, PathListDiff]
-
-    def as_dict(self) -> dict[str, str]:
-        """Flatten back to KEY=VALUE form (for smoke tests and backwards compat)."""
-        out = dict(self.assignments)
-        for key, diff in self.path_diffs.items():
-            parts: list[str] = []
-            if diff.prepend:
-                parts.append(":".join(diff.prepend))
-            parts.append(f"${key}")
-            if diff.append:
-                parts.append(":".join(diff.append))
-            out[key] = ":".join(parts)
-        return out
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedBuild:
-    context_dir: Path
-    dockerfile: Path
-    sdk_dir: Path
-    env_diff: EnvDiff
+class ArchSource:
+    """SDK archive reference for a single architecture."""
 
-
-def _should_exclude(name: str) -> bool:
-    if any(part in EXCLUDE_PREFIXES for part in ()):
-        return False
-    # Normalise leading "./" that some tars produce.
-    normalised = name.lstrip("./")
-    for prefix in EXCLUDE_PREFIXES:
-        if normalised == prefix.rstrip("/") or normalised.startswith(prefix):
-            return True
-    for suffix in EXCLUDE_SUFFIXES:
-        # Only exclude dll artefacts that sit directly under cangjie/lib/.
-        if normalised.startswith("cangjie/lib/") and normalised.endswith(suffix):
-            stem = normalised[len("cangjie/lib/") :]
-            if "/" not in stem:
-                return True
-    return False
+    arch: Arch
+    url: str
+    sha256: str
 
 
 def download_archive(url: str, dest: Path) -> None:
@@ -99,12 +56,13 @@ def download_archive(url: str, dest: Path) -> None:
         stream_download(client, url, handle)
 
 
-def verify_sha256(path: Path, expected: str) -> None:
-    digest = hashlib.sha256()
+def compute_sha256(path: Path) -> str:
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    actual = digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def verify_sha256(path: Path, expected: str) -> None:
+    actual = compute_sha256(path)
     if actual.lower() != expected.lower():
         raise RuntimeError(f"sha256 mismatch for {path}: expected {expected}, got {actual}")
 
@@ -112,26 +70,11 @@ def verify_sha256(path: Path, expected: str) -> None:
 def extract_archive(archive: Path, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "r:gz") as tar:
-        for member in tar:
-            if _should_exclude(member.name):
-                continue
-            tar.extract(member, dest, filter="data")
+        tar.extractall(dest, filter="data")
 
 
 def _split_path_list(value: str) -> tuple[str, ...]:
     return tuple(part for part in value.split(":") if part)
-
-
-def _dedupe(entries: tuple[str, ...]) -> tuple[str, ...]:
-    """Preserve order, drop duplicates (cheap defence against sloppy scripts)."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for entry in entries:
-        if entry in seen:
-            continue
-        seen.add(entry)
-        out.append(entry)
-    return tuple(out)
 
 
 def _split_path_diff(before: str, after: str) -> PathListDiff:
@@ -146,20 +89,18 @@ def _split_path_diff(before: str, after: str) -> PathListDiff:
     old_entries = _split_path_list(before)
     new_entries = _split_path_list(after)
     if not old_entries:
-        return PathListDiff(prepend=_dedupe(new_entries), append=())
+        return PathListDiff(prepend=tuple(dict.fromkeys(new_entries)), append=())
 
     old_len = len(old_entries)
     for i in range(len(new_entries) - old_len + 1):
         if new_entries[i : i + old_len] == old_entries:
             return PathListDiff(
-                prepend=_dedupe(new_entries[:i]),
-                append=_dedupe(new_entries[i + old_len :]),
+                prepend=tuple(dict.fromkeys(new_entries[:i])),
+                append=tuple(dict.fromkeys(new_entries[i + old_len :])),
             )
 
-    # envsetup removed or reordered baseline entries. Keep only the
-    # genuinely new ones as a prepend so we don't drop user-set baseline.
     added = tuple(p for p in new_entries if p not in old_entries)
-    return PathListDiff(prepend=_dedupe(added), append=())
+    return PathListDiff(prepend=tuple(dict.fromkeys(added)), append=())
 
 
 def capture_envsetup(sdk_home_on_host: Path) -> EnvDiff:
@@ -167,8 +108,6 @@ def capture_envsetup(sdk_home_on_host: Path) -> EnvDiff:
     if not envsetup.is_file():
         raise FileNotFoundError(f"envsetup.sh not found under {sdk_home_on_host}")
 
-    # Pass the script path via an env var rather than string-interpolating it
-    # into the shell command, so paths containing quotes or $ don't break.
     base_env = {
         "HOME": _BASELINE_HOME,
         "PATH": _BASELINE_PATH,
@@ -209,8 +148,6 @@ def capture_envsetup(sdk_home_on_host: Path) -> EnvDiff:
                 continue
             path_diffs[key] = diff
         elif key in _PATH_LIKE_KEYS:
-            # envsetup introduced a path list that had no baseline; emit as
-            # a plain value (colons stripped of empty trailing entries).
             cleaned = ":".join(_split_path_list(value))
             if cleaned:
                 assignments[key] = cleaned
@@ -239,32 +176,7 @@ def rewrite_paths(diff: EnvDiff, host_prefix: str, image_prefix: str) -> EnvDiff
     )
 
 
-def _quote_env_value(value: str) -> str:
-    # Escape backslash and double-quote; do NOT escape $ because we want
-    # $KEY references (for path-list vars) to expand against the base
-    # image's inherited env at Dockerfile parse time.
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _format_scalar_env(key: str, value: str) -> str:
-    escaped = _quote_env_value(value).replace("$", "\\$")
-    return f'ENV {key}="{escaped}"'
-
-
-def _format_path_env(key: str, diff: PathListDiff) -> str:
-    parts: list[str] = []
-    if diff.prepend:
-        parts.append(":".join(diff.prepend))
-    parts.append(f"${key}")
-    if diff.append:
-        parts.append(":".join(diff.append))
-    value = ":".join(parts)
-    return f'ENV {key}="{_quote_env_value(value)}"'
-
-
 def _build_smoke_test_env(sdk_home: Path, env_diff: EnvDiff) -> dict[str, str]:
-    # Keep non-path-like host vars such as SYSTEMROOT, but rebuild PATH-like
-    # vars from the same clean baseline used when envsetup.sh was captured.
     child_env = {key: value for key, value in os.environ.items() if key not in _PATH_LIKE_KEYS}
     child_env["HOME"] = _BASELINE_HOME
     child_env["PATH"] = _BASELINE_PATH
@@ -286,121 +198,104 @@ def _build_smoke_test_env(sdk_home: Path, env_diff: EnvDiff) -> dict[str, str]:
     return child_env
 
 
-def _prepare_output_dir(output_dir: Path) -> None:
-    marker_path = output_dir / _BUILD_CONTEXT_MARKER
-    if output_dir.exists():
-        if not output_dir.is_dir():
-            raise NotADirectoryError(f"output_dir is not a directory: {output_dir}")
-        if marker_path.is_file():
-            shutil.rmtree(output_dir)
-        elif any(output_dir.iterdir()):
-            raise FileExistsError(
-                f"refusing to reuse existing non-generated output_dir: {output_dir}"
-            )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    marker_path.write_text("generated by cangjie-images\n", encoding="utf-8")
-
-
-def render_dockerfile(
-    *,
-    base_image: str,
-    base_family: str,
-    channel: str,
-    version: str,
-    env_diff: EnvDiff,
-    sdk_context_dir: str,
-) -> str:
-    env_lines: list[str] = []
-    for key, value in sorted(env_diff.assignments.items()):
-        env_lines.append(_format_scalar_env(key, value))
-    for key, diff in sorted(env_diff.path_diffs.items()):
-        env_lines.append(_format_path_env(key, diff))
-    env_block = "\n".join(env_lines)
-
-    lines = [
-        "# syntax=docker/dockerfile:1.7",
-        "",
-        f"FROM --platform=$TARGETPLATFORM {base_image}",
-        "",
-        "RUN --mount=type=bind,source=scripts/install-base-deps.sh,target=/usr/local/bin/install-base-deps \\",
-        f"    install-base-deps {base_family}",
-        "",
-        f"COPY --link {sdk_context_dir}/ /",
-        "",
-        env_block,
-        "",
-        'LABEL org.opencontainers.image.title="Cangjie"',
-        'LABEL org.opencontainers.image.description="Prebuilt Cangjie SDK image"',
-        f'LABEL io.cangjie.channel="{channel}"',
-        f'LABEL io.cangjie.version="{version}"',
-        "",
-        "WORKDIR /workspace",
-        'CMD ["bash"]',
-        "",
-    ]
-    return "\n".join(lines)
-
-
 def _smoke_test(sdk_home: Path, env_diff: EnvDiff) -> None:
     child_env = _build_smoke_test_env(sdk_home, env_diff)
     for binary in ("cjc", "cjpm"):
         subprocess.run([binary, "--version"], env=child_env, check=True)
 
 
-def prepare_build_context(
+@dataclass(frozen=True, slots=True)
+class CapturedSdk:
+    env_diff: EnvDiff
+    sha256: str
+
+
+def capture_sdk(
     *,
     archive_url: str,
     archive_sha256: str,
-    base_image: str,
-    base_family: str,
-    channel: str,
-    version: str,
-    output_dir: Path,
-    scripts_dir: Path,
-    sdk_install_prefix: str = "/opt",
-) -> PreparedBuild:
-    output_dir = output_dir.resolve()
-    _prepare_output_dir(output_dir)
+    workdir: Path,
+    install_prefix: str = "/opt",
+    run_smoke_test: bool = True,
+) -> CapturedSdk:
+    """Download + extract one SDK archive, capture its envsetup diff.
 
-    # Scripts still used by the Dockerfile (bind-mounted, never in the image).
-    target_scripts = output_dir / "scripts"
-    target_scripts.mkdir()
-    shutil.copy2(scripts_dir / "install-base-deps.sh", target_scripts / "install-base-deps.sh")
+    ``workdir`` is caller-managed (typically a ``tempfile.TemporaryDirectory``).
+    Returns the image-relative EnvDiff plus the verified sha256.
+    """
+    workdir = workdir.resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
 
-    archive_path = output_dir / "sdk.tar.gz"
+    archive_path = workdir / "sdk.tar.gz"
     download_archive(archive_url, archive_path)
     if archive_sha256:
         verify_sha256(archive_path, archive_sha256)
+    computed_sha = compute_sha256(archive_path)
 
-    sdk_root_on_host = output_dir / "sdk-root"
-    install_prefix = Path(sdk_install_prefix)
-    sdk_tree_parent = sdk_root_on_host / install_prefix.relative_to("/")
-    sdk_tree_parent.mkdir(parents=True)
+    sdk_root_on_host = workdir / "sdk-root"
+    install = Path(install_prefix)
+    sdk_tree_parent = sdk_root_on_host / install.relative_to("/")
+    sdk_tree_parent.mkdir(parents=True, exist_ok=True)
     extract_archive(archive_path, sdk_tree_parent)
     archive_path.unlink()
 
     sdk_home_on_host = sdk_tree_parent / "cangjie"
-    sdk_home_in_image = str(install_prefix / "cangjie")
     raw_diff = capture_envsetup(sdk_home_on_host)
-    _smoke_test(sdk_home_on_host, raw_diff)
+    if run_smoke_test:
+        _smoke_test(sdk_home_on_host, raw_diff)
+    sdk_home_in_image = str(install / "cangjie")
     env_diff = rewrite_paths(raw_diff, str(sdk_home_on_host), sdk_home_in_image)
 
-    dockerfile = output_dir / "Dockerfile"
-    dockerfile.write_text(
-        render_dockerfile(
-            base_image=base_image,
-            base_family=base_family,
-            channel=channel,
-            version=version,
-            env_diff=env_diff,
-            sdk_context_dir="sdk-root",
-        ),
-        encoding="utf-8",
+    return CapturedSdk(env_diff=env_diff, sha256=computed_sha)
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedArch:
+    """SDK source + arch-specific envsetup diff, ready to bake into a Dockerfile."""
+
+    source: ArchSource
+    env_diff: EnvDiff
+
+
+def _capture_one(
+    arch: ArchVariant, artifact: PlatformArtifact, run_smoke_test: bool
+) -> CapturedArch:
+    with tempfile.TemporaryDirectory(prefix="cangjie-capture-") as tmp:
+        result = capture_sdk(
+            archive_url=artifact.url,
+            archive_sha256=artifact.sha256,
+            workdir=Path(tmp),
+            run_smoke_test=run_smoke_test and arch.name == "amd64",
+        )
+    return CapturedArch(
+        source=ArchSource(arch=arch.name, url=artifact.url, sha256=result.sha256),
+        env_diff=result.env_diff,
     )
 
-    return PreparedBuild(
-        context_dir=output_dir,
-        dockerfile=dockerfile,
-        sdk_dir=sdk_home_on_host,
-        env_diff=env_diff,
-    )
+
+def capture_sources(
+    platforms: Mapping[str, PlatformArtifact],
+    *,
+    run_smoke_test: bool = True,
+) -> list[CapturedArch]:
+    """Fetch one SDK per available architecture and capture each arch's envsetup.
+
+    Arches run in parallel — each is dominated by network + tar I/O (releases
+    the GIL), so threading the few seconds of bash/subprocess work is safe.
+    Each arch's env diff is kept independent because envsetup paths embed the
+    arch's native lib dir (``linux_x86_64_cjnative`` vs
+    ``linux_aarch64_cjnative``). Smoke test only runs on the host-matching arch.
+    """
+    jobs = [
+        (arch, platforms[arch.manifest_key])
+        for arch in ARCH_VARIANTS
+        if arch.manifest_key in platforms
+    ]
+    if not jobs:
+        return []
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        futures = [
+            executor.submit(_capture_one, arch, artifact, run_smoke_test) for arch, artifact in jobs
+        ]
+        return [f.result() for f in futures]

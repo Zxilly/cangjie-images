@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any, BinaryIO
 
 import httpx
 from tenacity import (
@@ -46,14 +47,14 @@ _retry = retry(
 
 
 @contextmanager
-def http_client(**overrides: object) -> Iterator[httpx.Client]:
-    params = {
+def http_client(**overrides: Any) -> Iterator[httpx.Client]:
+    params: dict[str, Any] = {
         "timeout": _DEFAULT_TIMEOUT,
         "headers": {"User-Agent": USER_AGENT, "Accept": "application/json"},
         "follow_redirects": True,
     }
-    params.update(overrides)  # type: ignore[arg-type]
-    with httpx.Client(**params) as client:  # type: ignore[arg-type]
+    params.update(overrides)
+    with httpx.Client(**params) as client:
         yield client
 
 
@@ -73,7 +74,7 @@ def get_json(
 
 
 @_retry
-def stream_download(client: httpx.Client, url: str, dest_fp) -> None:
+def stream_download(client: httpx.Client, url: str, dest_fp: BinaryIO) -> None:
     with client.stream("GET", url) as response:
         response.raise_for_status()
         for chunk in response.iter_bytes(chunk_size=1024 * 1024):

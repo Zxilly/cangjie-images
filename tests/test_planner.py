@@ -4,49 +4,40 @@ import json
 
 import httpx
 import pytest
-from pydantic import ValidationError
 
 import cangjie_images.planner as planner
 from cangjie_images.planner import (
+    _compute_stable_heads,
     build_plan,
     build_tags,
-    compute_minor_alias_targets,
     merge_release_manifests,
+    scan_committed_versions,
     write_digest_metadata,
 )
 
 
-def sample_manifest() -> dict:
-    return {
-        "channels": {
-            "lts": {
-                "latest": "1.0.5",
-                "versions": {
-                    "1.0.4": {
-                        "linux-x64": {"url": "https://example.com/1.0.4-amd64.tgz", "sha256": "a" * 64},
-                        "linux-arm64": {"url": "https://example.com/1.0.4-arm64.tgz", "sha256": "b" * 64},
-                    },
-                    "1.0.5": {
-                        "linux-x64": {"url": "https://example.com/1.0.5-amd64.tgz", "sha256": "c" * 64},
-                        "linux-arm64": {"url": "https://example.com/1.0.5-arm64.tgz", "sha256": "d" * 64},
-                    },
-                },
-            },
-            "sts": {
-                "latest": "1.1.0-beta.25",
-                "versions": {
-                    "0.53.18": {
-                        "linux-x64": {"url": "https://example.com/0.53.18-amd64.tgz", "sha256": "e" * 64},
-                        "linux-arm64": {"url": "https://example.com/0.53.18-arm64.tgz", "sha256": "f" * 64},
-                    },
-                    "1.1.0-beta.25": {
-                        "linux-x64": {"url": "https://example.com/1.1.0b25-amd64.tgz", "sha256": "1" * 64},
-                        "linux-arm64": {"url": "https://example.com/1.1.0b25-arm64.tgz", "sha256": "2" * 64},
-                    },
-                },
-            },
-        }
-    }
+def _write_dockerfile(
+    versions_root,
+    channel: str,
+    version: str,
+    base: str,
+    arches: tuple[str, ...] = ("amd64", "arm64"),
+) -> None:
+    for arch in arches:
+        target = versions_root / channel / version / base / arch / "Dockerfile"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            f"FROM scratch AS sdk\nADD --checksum=sha256:{'0' * 64} url /sdk.tar.gz\n",
+            encoding="utf-8",
+        )
+
+
+def _seed_versions(versions_root) -> None:
+    _write_dockerfile(versions_root, "lts", "1.0.4", "bookworm")
+    _write_dockerfile(versions_root, "lts", "1.0.4", "trixie")
+    _write_dockerfile(versions_root, "lts", "1.0.5", "bookworm")
+    _write_dockerfile(versions_root, "lts", "1.0.5", "trixie")
+    _write_dockerfile(versions_root, "sts", "0.53.18", "bookworm")
 
 
 def sample_nightly_release(
@@ -70,11 +61,54 @@ def sample_nightly_release(
     return {"tag_name": version, "assets": assets}
 
 
-def test_compute_minor_alias_targets_only_uses_stable_versions() -> None:
-    aliases = compute_minor_alias_targets(sample_manifest())
-    assert aliases["1.0.5"] == ("1.0",)
-    assert aliases["0.53.18"] == ("0.53",)
-    assert "1.1.0-beta.25" not in aliases
+def test_scan_committed_versions(tmp_path) -> None:
+    _seed_versions(tmp_path)
+    found = scan_committed_versions(tmp_path)
+    combos = {(e.channel, e.version, e.base, e.arch) for e in found}
+    assert ("lts", "1.0.5", "bookworm", "amd64") in combos
+    assert ("lts", "1.0.5", "bookworm", "arm64") in combos
+    assert ("sts", "0.53.18", "bookworm", "amd64") in combos
+
+
+def test_scan_committed_versions_ignores_unknown_dirs(tmp_path) -> None:
+    _write_dockerfile(tmp_path, "lts", "1.0.5", "bookworm")
+    # Unsupported channel name.
+    _write_dockerfile(tmp_path, "xyz", "1.0.5", "bookworm")
+    # Unsupported base name.
+    _write_dockerfile(tmp_path, "lts", "1.0.5", "alpine")
+    # Unsupported arch name.
+    bad_arch = tmp_path / "lts" / "1.0.5" / "bookworm" / "riscv64" / "Dockerfile"
+    bad_arch.parent.mkdir(parents=True, exist_ok=True)
+    bad_arch.write_text("FROM scratch\n", encoding="utf-8")
+
+    found = scan_committed_versions(tmp_path)
+    bases_seen = {(e.channel, e.base, e.arch) for e in found}
+    assert bases_seen <= {
+        ("lts", "bookworm", "amd64"),
+        ("lts", "bookworm", "arm64"),
+    }
+
+
+def test_scan_committed_skips_base_dirs_without_dockerfile(tmp_path) -> None:
+    stray = tmp_path / "lts" / "1.0.5" / "bookworm" / "amd64"
+    stray.mkdir(parents=True)
+    (stray / "README.md").write_text("no dockerfile here", encoding="utf-8")
+    assert scan_committed_versions(tmp_path) == []
+
+
+def test_compute_stable_heads_picks_latest() -> None:
+    from pathlib import Path
+
+    committed = [
+        planner.CommittedDockerfile("lts", "1.0.4", "bookworm", "amd64", Path("/x")),
+        planner.CommittedDockerfile("lts", "1.0.5", "bookworm", "amd64", Path("/x")),
+        planner.CommittedDockerfile("sts", "0.53.18", "bookworm", "amd64", Path("/x")),
+    ]
+    latest_lts, latest_sts, minor_aliases = _compute_stable_heads(committed)
+    assert latest_lts == "1.0.5"
+    assert latest_sts == "0.53.18"
+    assert minor_aliases["1.0.5"] == ("1.0",)
+    assert minor_aliases["0.53.18"] == ("0.53",)
 
 
 def test_build_tags_for_default_lts_base() -> None:
@@ -84,7 +118,7 @@ def test_build_tags_for_default_lts_base() -> None:
         base_name="bookworm",
         default_base=True,
         latest_lts="1.0.5",
-        latest_sts="1.1.0-beta.25",
+        latest_sts="0.53.18",
         minor_aliases={"1.0.5": ("1.0",)},
     )
     assert tags == (
@@ -99,7 +133,8 @@ def test_build_tags_for_default_lts_base() -> None:
     )
 
 
-def test_build_plan_skips_release_when_all_tags_exist() -> None:
+def test_build_plan_skips_release_when_all_tags_exist(tmp_path) -> None:
+    _seed_versions(tmp_path)
     existing_tags = {
         "1.0.5",
         "1.0.5-bookworm",
@@ -113,17 +148,16 @@ def test_build_plan_skips_release_when_all_tags_exist() -> None:
     plan = build_plan(
         image_name="zxilly/cangjie",
         include_nightly=False,
-        manifest=sample_manifest(),
+        versions_root=tmp_path,
         existing_tags=existing_tags,
-        skipped_nightly_reason=None,
     )
-
     release_ids = {release.release_id for release in plan.publish_matrix}
     assert "lts-1-0-5-bookworm" not in release_ids
     assert "lts-1-0-4-bookworm" in release_ids
 
 
-def test_build_plan_keeps_release_when_existing_tags_are_missing_expected_arch() -> None:
+def test_build_plan_keeps_release_when_existing_missing_arch(tmp_path) -> None:
+    _seed_versions(tmp_path)
     existing_tags = {
         "1.0.5": {"amd64", "arm64"},
         "1.0.5-bookworm": {"amd64"},
@@ -137,106 +171,145 @@ def test_build_plan_keeps_release_when_existing_tags_are_missing_expected_arch()
     plan = build_plan(
         image_name="zxilly/cangjie",
         include_nightly=False,
-        manifest=sample_manifest(),
+        versions_root=tmp_path,
         existing_tags=existing_tags,
     )
-
     release_ids = {release.release_id for release in plan.publish_matrix}
     assert "lts-1-0-5-bookworm" in release_ids
 
 
-def test_build_plan_keeps_release_when_moving_aliases_are_stale() -> None:
-    current_release = {"amd64": "sha256:new-amd64", "arm64": "sha256:new-arm64"}
-    stale_alias = {"amd64": "sha256:old-amd64", "arm64": "sha256:old-arm64"}
+def test_build_plan_keeps_release_when_moving_aliases_are_stale(tmp_path) -> None:
+    _seed_versions(tmp_path)
+    current = {"amd64": "sha256:new-amd64", "arm64": "sha256:new-arm64"}
+    stale = {"amd64": "sha256:old-amd64", "arm64": "sha256:old-arm64"}
     existing_tags = {
-        "1.0.5": current_release,
-        "1.0.5-bookworm": current_release,
-        "1.0": current_release,
-        "1.0-bookworm": current_release,
-        "lts": stale_alias,
-        "lts-bookworm": stale_alias,
-        "latest": stale_alias,
-        "latest-bookworm": stale_alias,
+        "1.0.5": current,
+        "1.0.5-bookworm": current,
+        "1.0": current,
+        "1.0-bookworm": current,
+        "lts": stale,
+        "lts-bookworm": stale,
+        "latest": stale,
+        "latest-bookworm": stale,
     }
     plan = build_plan(
         image_name="zxilly/cangjie",
         include_nightly=False,
-        manifest=sample_manifest(),
+        versions_root=tmp_path,
         existing_tags=existing_tags,
     )
-
     release_ids = {release.release_id for release in plan.publish_matrix}
     assert "lts-1-0-5-bookworm" in release_ids
 
 
-def test_build_plan_rejects_invalid_manifest() -> None:
-    with pytest.raises(ValidationError):
-        build_plan(
-            image_name="zxilly/cangjie",
-            include_nightly=False,
-            manifest={"channels": {"lts": {"latest": 1.0, "versions": "oops"}}},
-            existing_tags=set(),
-        )
+def test_build_plan_points_at_committed_context_dir(tmp_path) -> None:
+    _write_dockerfile(tmp_path, "lts", "1.0.5", "bookworm")
+    plan = build_plan(
+        image_name="zxilly/cangjie",
+        include_nightly=False,
+        versions_root=tmp_path,
+        existing_tags=set(),
+    )
+    assert plan.build_matrix
+    for build in plan.build_matrix:
+        assert build.context_dir.endswith(build.arch)
 
 
-def test_build_plan_adds_nightly_tags() -> None:
+def test_build_plan_empty_versions_root_has_no_work(tmp_path) -> None:
+    plan = build_plan(
+        image_name="zxilly/cangjie",
+        include_nightly=False,
+        versions_root=tmp_path,
+        existing_tags=set(),
+    )
+    assert plan.build_matrix == ()
+    assert plan.publish_matrix == ()
+
+
+def test_build_plan_adds_nightly_tags(tmp_path, monkeypatch) -> None:
+    _write_dockerfile(tmp_path, "lts", "1.0.5", "bookworm")
+    nightly_ctx = tmp_path / "nightly-ctx"
+
+    recorded: dict[str, object] = {}
+
+    def fake_render_nightly(release, platforms, output_root, bases=None):
+        recorded["output_root"] = output_root
+        recorded["bases"] = bases
+        selected = bases if bases is not None else tuple()
+        contexts = {}
+        for base in selected:
+            for arch in ("amd64", "arm64"):
+                ctx = output_root / f"nightly-{release.tag_name}-{base.name}-{arch}"
+                ctx.mkdir(parents=True, exist_ok=True)
+                (ctx / "Dockerfile").write_text("stub", encoding="utf-8")
+                contexts[(base.name, arch)] = ctx
+        return contexts
+
+    monkeypatch.setattr(planner, "_render_nightly_contexts", fake_render_nightly)
+
     plan = build_plan(
         image_name="zxilly/cangjie",
         include_nightly=True,
-        manifest=sample_manifest(),
+        versions_root=tmp_path,
         existing_tags=set(),
         nightly_release=sample_nightly_release(),
-        skipped_nightly_reason=None,
+        nightly_context_root=nightly_ctx,
     )
 
-    nightly_release = next(
-        release
-        for release in plan.publish_matrix
-        if release.channel == "nightly" and release.base == "bookworm"
-    )
-    assert nightly_release.tags[:4] == (
+    nightly_releases = [r for r in plan.publish_matrix if r.channel == "nightly"]
+    assert nightly_releases, "expected at least one nightly release"
+    first = next(r for r in nightly_releases if r.base == "bookworm")
+    assert first.tags[:4] == (
         "nightly-1.1.0-alpha.20260306010001",
         "nightly-1.1.0-alpha.20260306010001-bookworm",
         "nightly",
         "nightly-bookworm",
     )
-    nightly_builds = [build for build in plan.build_matrix if build.release_id == nightly_release.release_id]
-    assert {build.arch for build in nightly_builds} == {"amd64", "arm64"}
+    builds = [b for b in plan.build_matrix if b.release_id == first.release_id]
+    assert {b.arch for b in builds} == {"amd64", "arm64"}
 
 
-def test_build_plan_only_uses_present_nightly_assets() -> None:
+def test_build_plan_only_uses_present_nightly_assets(tmp_path, monkeypatch) -> None:
+    def fake_render(release, platforms, output_root, bases=None):
+        selected = bases if bases is not None else tuple()
+        contexts = {}
+        for base in selected:
+            ctx = output_root / f"nightly-{release.tag_name}-{base.name}-amd64"
+            ctx.mkdir(parents=True, exist_ok=True)
+            (ctx / "Dockerfile").write_text("stub", encoding="utf-8")
+            contexts[(base.name, "amd64")] = ctx
+        return contexts
+
+    monkeypatch.setattr(planner, "_render_nightly_contexts", fake_render)
+
     plan = build_plan(
         image_name="zxilly/cangjie",
         include_nightly=True,
-        manifest=sample_manifest(),
+        versions_root=tmp_path,
         existing_tags=set(),
         nightly_release=sample_nightly_release(include_arm64=False),
+        nightly_context_root=tmp_path / "ctx",
     )
 
-    nightly_release = next(
-        release
-        for release in plan.publish_matrix
-        if release.channel == "nightly" and release.base == "bookworm"
-    )
-    assert nightly_release.arches == ("amd64",)
-    nightly_builds = [build for build in plan.build_matrix if build.release_id == nightly_release.release_id]
-    assert {build.arch for build in nightly_builds} == {"amd64"}
+    nightly = next(r for r in plan.publish_matrix if r.channel == "nightly")
+    assert nightly.arches == ("amd64",)
+    builds = [b for b in plan.build_matrix if b.release_id == nightly.release_id]
+    assert {b.arch for b in builds} == {"amd64"}
 
 
-def test_build_plan_continues_when_nightly_lookup_fails(monkeypatch) -> None:
+def test_build_plan_continues_when_nightly_lookup_fails(tmp_path, monkeypatch) -> None:
+    _write_dockerfile(tmp_path, "lts", "1.0.5", "bookworm")
     monkeypatch.setattr(
         planner,
         "fetch_latest_nightly",
         lambda **_: (None, "nightly API request failed with HTTP 502"),
     )
-
     plan = build_plan(
         image_name="zxilly/cangjie",
         include_nightly=True,
-        manifest=sample_manifest(),
+        versions_root=tmp_path,
         existing_tags=set(),
     )
-
     assert plan.skipped_nightly_reason == "nightly API request failed with HTTP 502"
     assert any(release.channel == "lts" for release in plan.publish_matrix)
 
