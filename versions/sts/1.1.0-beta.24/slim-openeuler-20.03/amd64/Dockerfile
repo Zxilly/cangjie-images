@@ -26,6 +26,7 @@ EOF
 FROM openeuler/openeuler:20.03-lts-sp4
 RUN <<'EOF'
 set -eux
+sed -i.upstream -E 's|https?://repo\.openeuler\.org|https://mirrors.ocf.berkeley.edu/openeuler|g' /etc/yum.repos.d/*.repo
 dnf install -y \
       ca-certificates \
       gcc \
@@ -33,6 +34,7 @@ dnf install -y \
       openssl-libs
 dnf clean all
 rm -rf /var/cache/dnf
+for f in /etc/yum.repos.d/*.repo.upstream; do mv -f "$f" "${f%.upstream}"; done
 EOF
 
 COPY --from=extractor /out/ /
