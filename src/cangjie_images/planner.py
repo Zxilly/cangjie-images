@@ -10,6 +10,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import ValidationError
@@ -231,6 +232,17 @@ def _version_sort_key(version: str) -> tuple[int, tuple[int, int, int], str]:
     return (0, parsed, version)
 
 
+def _normalize_gitcode_asset_url(url: str) -> str:
+    parts = urlsplit(url)
+    if (
+        parts.netloc == "api.gitcode.com"
+        and "/releases/download/" in parts.path
+        and parts.path.count("/") >= 4
+    ):
+        return urlunsplit((parts.scheme, "gitcode.com", parts.path, parts.query, parts.fragment))
+    return url
+
+
 @dataclass(frozen=True, slots=True)
 class CommittedDockerfile:
     channel: StableChannel
@@ -317,7 +329,10 @@ def nightly_download_info(
     )
 
     version = release_model.tag_name
-    assets_by_name = {asset.name: asset.browser_download_url for asset in release_model.assets}
+    assets_by_name = {
+        asset.name: _normalize_gitcode_asset_url(asset.browser_download_url)
+        for asset in release_model.assets
+    }
     info: dict[str, PlatformArtifact] = {}
     for arch in ARCH_VARIANTS:
         filename = f"cangjie-sdk-linux-{arch.nightly_arch}-{version}.tar.gz"

@@ -61,6 +61,30 @@ def sample_nightly_release(
     return {"tag_name": version, "assets": assets}
 
 
+def test_nightly_download_info_normalizes_gitcode_asset_host() -> None:
+    release = {
+        "tag_name": "1.1.0-alpha.20260418010043",
+        "assets": [
+            {
+                "name": "cangjie-sdk-linux-x64-1.1.0-alpha.20260418010043.tar.gz",
+                "browser_download_url": (
+                    "https://api.gitcode.com/Cangjie/nightly_build/releases/download/"
+                    "1.1.0-alpha.20260418010043/"
+                    "cangjie-sdk-linux-x64-1.1.0-alpha.20260418010043.tar.gz"
+                ),
+            }
+        ],
+    }
+
+    info = planner.nightly_download_info(release)
+
+    assert info["linux-x64"].url == (
+        "https://gitcode.com/Cangjie/nightly_build/releases/download/"
+        "1.1.0-alpha.20260418010043/"
+        "cangjie-sdk-linux-x64-1.1.0-alpha.20260418010043.tar.gz"
+    )
+
+
 def test_scan_committed_versions(tmp_path) -> None:
     _seed_versions(tmp_path)
     found = scan_committed_versions(tmp_path)
