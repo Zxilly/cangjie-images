@@ -32,7 +32,7 @@ apt-get install -y --no-install-recommends \
       ca-certificates \
       gcc \
       libc6-dev \
-      libssl3
+      libssl1.1
 rm -rf /var/lib/apt/lists/*
 EOF
 

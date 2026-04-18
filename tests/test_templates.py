@@ -141,6 +141,22 @@ def test_render_dockerfile_debian_slim_drops_dev_toolchain() -> None:
     assert 'LABEL io.cangjie.slim="true"' in content
 
 
+def test_render_dockerfile_debian_slim_bullseye_uses_libssl1_1() -> None:
+    content = render_dockerfile(
+        base_name="slim-bullseye",
+        base_image="debian:bullseye-slim",
+        base_family="debian",
+        channel="lts",
+        version="1.0.5",
+        arch="amd64",
+        source=_source(),
+        slim=True,
+    )
+    install = _extract_install_block(content, "apt-get install")
+    assert "libssl1.1" in install
+    assert "libssl3" not in install
+
+
 def test_render_dockerfile_openeuler_slim_uses_minimal_deps() -> None:
     content = render_dockerfile(
         base_name="slim-openeuler-24.03",

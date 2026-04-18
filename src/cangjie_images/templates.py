@@ -23,16 +23,20 @@ _DOCS_URL = "https://github.com/Zxilly/cangjie-images#readme"
 _DEBIAN_FULL_PACKAGES: tuple[str, ...] = ()
 
 # Mirrors rust-lang/docker-rust's slim variant: only what's needed to link
-# cjc-emitted binaries (gcc + libc headers) plus ca-certs and libssl3,
+# cjc-emitted binaries (gcc + libc headers) plus ca-certs and libssl,
 # which the Cangjie stdlib dynamically loads at runtime. Users who need
 # build tools (make, git, pkg-config, -dev headers) should use the
 # non-slim variant.
-_DEBIAN_SLIM_PACKAGES: tuple[str, ...] = (
-    "ca-certificates",
-    "gcc",
-    "libc6-dev",
-    "libssl3",
-)
+_DEBIAN_SLIM_BASE_PACKAGES: tuple[str, ...] = ("ca-certificates", "gcc", "libc6-dev")
+
+# libssl's Debian package name tracks the OpenSSL soname bundled in each
+# release: bullseye (Debian 11) ships libssl1.1; bookworm (12) and trixie
+# (13) ship libssl3.
+_DEBIAN_SLIM_LIBSSL_BY_BASE: dict[str, str] = {
+    "slim-bullseye": "libssl1.1",
+    "slim-bookworm": "libssl3",
+    "slim-trixie": "libssl3",
+}
 
 _OPENEULER_FULL_PACKAGES: tuple[str, ...] = (
     "bash",
@@ -83,12 +87,20 @@ _NATIVE_LIB_TOKEN_BY_ARCH: dict[Arch, str] = {a.name: a.native_lib_token for a i
 # bookkeeping — the template just interpolates a ready-to-emit block.
 _LINE_CONT = " \\\n      "
 _TAR_EXCLUDES_BLOCK = _LINE_CONT.join(f"--exclude='{p}'" for p in _TAR_EXCLUDES)
-_PACKAGES_BLOCKS: dict[tuple[BaseFamily, bool], str] = {
-    ("debian", False): _LINE_CONT.join(_DEBIAN_FULL_PACKAGES),
-    ("debian", True): _LINE_CONT.join(_DEBIAN_SLIM_PACKAGES),
-    ("openeuler", False): _LINE_CONT.join(_OPENEULER_FULL_PACKAGES),
-    ("openeuler", True): _LINE_CONT.join(_OPENEULER_SLIM_PACKAGES),
-}
+
+
+def _packages_for(base_family: BaseFamily, *, slim: bool, base_name: str) -> tuple[str, ...]:
+    if base_family == "debian":
+        if not slim:
+            return _DEBIAN_FULL_PACKAGES
+        try:
+            libssl = _DEBIAN_SLIM_LIBSSL_BY_BASE[base_name]
+        except KeyError as exc:
+            raise ValueError(f"unknown debian slim base: {base_name}") from exc
+        return (*_DEBIAN_SLIM_BASE_PACKAGES, libssl)
+    if base_family == "openeuler":
+        return _OPENEULER_SLIM_PACKAGES if slim else _OPENEULER_FULL_PACKAGES
+    raise ValueError(f"unsupported base family: {base_family}")
 
 _template: Template | None = None
 
@@ -142,7 +154,9 @@ def render_dockerfile(
         slim=slim,
         source=source,
         native_lib_token=_NATIVE_LIB_TOKEN_BY_ARCH[arch],
-        packages_block=_PACKAGES_BLOCKS[(base_family, slim)],
+        packages_block=_LINE_CONT.join(
+            _packages_for(base_family, slim=slim, base_name=base_name)
+        ),
         tar_excludes_block=_TAR_EXCLUDES_BLOCK,
         extractor_image=_EXTRACTOR_IMAGE,
         repo_url=_REPO_URL,
