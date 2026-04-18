@@ -48,7 +48,7 @@ _SUPPORTED_ARCHES: frozenset[Arch] = frozenset(arch.name for arch in ARCH_VARIAN
 _BASE_BY_NAME = {base.name: base for base in BASE_VARIANTS}
 _ARCH_BY_NAME = {arch.name: arch for arch in ARCH_VARIANTS}
 _VERSIONS_DIRNAME = "versions"
-_NIGHTLY_CONTEXT_ROOT = ".build-context"
+_NIGHTLY_CONTEXT_ROOT = "build-context"
 
 
 @dataclass(frozen=True, slots=True)

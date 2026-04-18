@@ -50,8 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument(
         "--nightly-context-root",
         type=Path,
-        default=Path(".build-context"),
-        help="Directory where nightly Dockerfiles are rendered (defaults to ./.build-context).",
+        default=Path("build-context"),
+        help="Directory where nightly Dockerfiles are rendered (defaults to ./build-context).",
     )
     plan_parser.add_argument(
         "--include-nightly",
