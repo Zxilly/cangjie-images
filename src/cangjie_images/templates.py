@@ -15,28 +15,26 @@ _EXTRACTOR_IMAGE = "debian:bookworm-slim"
 _REPO_URL = "https://github.com/Zxilly/cangjie-images"
 _DOCS_URL = "https://github.com/Zxilly/cangjie-images#readme"
 
-_DEBIAN_PACKAGES: tuple[str, ...] = (
-    "bash",
-    "binutils",
+# Full debian variant derives from buildpack-deps, which already provides
+# gcc/g++/make/git/curl/pkg-config/libssl-dev (pulls libssl3)/xz-utils/
+# unzip/zip/ca-certificates, so we don't need to install anything on top.
+# Kept as an empty tuple (instead of a special-case None) so the rendering
+# code stays uniform across (family, slim) combinations.
+_DEBIAN_FULL_PACKAGES: tuple[str, ...] = ()
+
+# Mirrors rust-lang/docker-rust's slim variant: only what's needed to link
+# cjc-emitted binaries (gcc + libc headers) plus ca-certs and libssl3,
+# which the Cangjie stdlib dynamically loads at runtime. Users who need
+# build tools (make, git, pkg-config, -dev headers) should use the
+# non-slim variant.
+_DEBIAN_SLIM_PACKAGES: tuple[str, ...] = (
     "ca-certificates",
-    "curl",
-    "findutils",
-    "g++",
     "gcc",
-    "git",
     "libc6-dev",
-    "libssl-dev",
-    "make",
-    "openssl",
-    "pkg-config",
-    "procps",
-    "tar",
-    "unzip",
-    "xz-utils",
-    "zip",
+    "libssl3",
 )
 
-_OPENEULER_PACKAGES: tuple[str, ...] = (
+_OPENEULER_FULL_PACKAGES: tuple[str, ...] = (
     "bash",
     "binutils",
     "ca-certificates",
@@ -57,6 +55,18 @@ _OPENEULER_PACKAGES: tuple[str, ...] = (
     "zip",
 )
 
+# openEuler has no `*-slim` base image, so the slim variant shares the same
+# base image as the full variant and is distinguished purely by this
+# minimal package set (same intent as _DEBIAN_SLIM_PACKAGES).
+# `openssl-libs` is the runtime .so the Cangjie stdlib dlopens; we don't
+# pull in the `openssl` CLI here to keep the image minimal.
+_OPENEULER_SLIM_PACKAGES: tuple[str, ...] = (
+    "ca-certificates",
+    "gcc",
+    "glibc-devel",
+    "openssl-libs",
+)
+
 _TAR_EXCLUDES: tuple[str, ...] = (
     "cangjie/lib/windows_*",
     "cangjie/runtime/lib/windows_*",
@@ -73,8 +83,12 @@ _NATIVE_LIB_TOKEN_BY_ARCH: dict[Arch, str] = {a.name: a.native_lib_token for a i
 # bookkeeping — the template just interpolates a ready-to-emit block.
 _LINE_CONT = " \\\n      "
 _TAR_EXCLUDES_BLOCK = _LINE_CONT.join(f"--exclude='{p}'" for p in _TAR_EXCLUDES)
-_DEBIAN_PACKAGES_BLOCK = _LINE_CONT.join(_DEBIAN_PACKAGES)
-_OPENEULER_PACKAGES_BLOCK = _LINE_CONT.join(_OPENEULER_PACKAGES)
+_PACKAGES_BLOCKS: dict[tuple[BaseFamily, bool], str] = {
+    ("debian", False): _LINE_CONT.join(_DEBIAN_FULL_PACKAGES),
+    ("debian", True): _LINE_CONT.join(_DEBIAN_SLIM_PACKAGES),
+    ("openeuler", False): _LINE_CONT.join(_OPENEULER_FULL_PACKAGES),
+    ("openeuler", True): _LINE_CONT.join(_OPENEULER_SLIM_PACKAGES),
+}
 
 _template: Template | None = None
 
@@ -106,6 +120,7 @@ def render_dockerfile(
     version: str,
     arch: Arch,
     source: ArchSource,
+    slim: bool = False,
 ) -> str:
     """Render a fully self-contained single-arch Dockerfile via Jinja2."""
     if source.arch != arch:
@@ -124,10 +139,10 @@ def render_dockerfile(
         base_name=base_name,
         base_image=base_image,
         base_family=base_family,
+        slim=slim,
         source=source,
         native_lib_token=_NATIVE_LIB_TOKEN_BY_ARCH[arch],
-        debian_packages_block=_DEBIAN_PACKAGES_BLOCK,
-        openeuler_packages_block=_OPENEULER_PACKAGES_BLOCK,
+        packages_block=_PACKAGES_BLOCKS[(base_family, slim)],
         tar_excludes_block=_TAR_EXCLUDES_BLOCK,
         extractor_image=_EXTRACTOR_IMAGE,
         repo_url=_REPO_URL,

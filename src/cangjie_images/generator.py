@@ -121,6 +121,7 @@ def generate(
                         version=version,
                         arch=target.arch,
                         source=source,
+                        slim=base.slim,
                     ),
                     encoding="utf-8",
                 )

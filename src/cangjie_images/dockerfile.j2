@@ -1,9 +1,8 @@
 {# Jinja2 template for a single-arch Cangjie Docker image.
    Context variables supplied by templates.render_dockerfile:
-     channel, version, arch, base_name, base_image, base_family,
+     channel, version, arch, base_name, base_image, base_family, slim,
      source (ArchSource), native_lib_token,
-     debian_packages_block, openeuler_packages_block,
-     tar_excludes_block, extractor_image,
+     packages_block, tar_excludes_block, extractor_image,
      repo_url, docs_url.
 #}
 # syntax=docker/dockerfile:1.7
@@ -26,20 +25,20 @@ tar -xzf /sdk.tar.gz -C /out/opt \
 EOF
 
 FROM {{ base_image }}
-{%- if base_family == "debian" %}
+{%- if packages_block and base_family == "debian" %}
 RUN <<'EOF'
 set -eux
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-      {{ debian_packages_block }}
+      {{ packages_block }}
 rm -rf /var/lib/apt/lists/*
 EOF
-{%- elif base_family == "openeuler" %}
+{%- elif packages_block and base_family == "openeuler" %}
 RUN <<'EOF'
 set -eux
 dnf install -y \
-      {{ openeuler_packages_block }}
+      {{ packages_block }}
 dnf clean all
 rm -rf /var/cache/dnf
 EOF
@@ -66,6 +65,7 @@ LABEL io.cangjie.arch="{{ arch }}"
 LABEL io.cangjie.backend="{{ source.backend }}"
 LABEL io.cangjie.base="{{ base_name }}"
 LABEL io.cangjie.base.family="{{ base_family }}"
+LABEL io.cangjie.slim="{{ 'true' if slim else 'false' }}"
 LABEL io.cangjie.sdk.url="{{ source.url }}"
 LABEL io.cangjie.sdk.sha256="{{ source.sha256 }}"
 

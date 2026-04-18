@@ -485,6 +485,7 @@ def _render_nightly_contexts(
                     version=version,
                     arch=source.arch,
                     source=source,
+                    slim=base.slim,
                 ),
                 encoding="utf-8",
             )

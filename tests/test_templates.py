@@ -16,13 +16,14 @@ def _source(arch: str = "amd64", backend: str = "cjnative") -> ArchSource:
 
 def test_render_dockerfile_single_arch_is_linear() -> None:
     content = render_dockerfile(
-        base_name="bookworm",
+        base_name="slim-bookworm",
         base_image="debian:bookworm-slim",
         base_family="debian",
         channel="lts",
         version="1.0.5",
         arch="amd64",
         source=_source(),
+        slim=True,
     )
 
     assert "# syntax=docker/dockerfile:1.7" in content
@@ -112,6 +113,72 @@ def test_render_dockerfile_openeuler_uses_dnf() -> None:
     assert "dnf install -y" in content
     assert "gcc-c++" in content
     assert "apt-get" not in content
+
+
+def _extract_install_block(content: str, marker: str) -> str:
+    """Return the substring between the package-manager install line and the
+    next blank line, so assertions can check the exact install list without
+    matching unrelated tokens elsewhere in the Dockerfile (labels, URLs, etc.)."""
+    start = content.index(marker)
+    end = content.index("\nEOF", start)
+    return content[start:end]
+
+
+def test_render_dockerfile_debian_slim_drops_dev_toolchain() -> None:
+    content = render_dockerfile(
+        base_name="slim-bookworm",
+        base_image="debian:bookworm-slim",
+        base_family="debian",
+        channel="lts",
+        version="1.0.5",
+        arch="amd64",
+        source=_source(),
+        slim=True,
+    )
+    install = _extract_install_block(content, "apt-get install")
+    for pkg in ("ca-certificates", "gcc", "libc6-dev", "libssl3"):
+        assert pkg in install
+    for pkg in ("g++", "git", "make", "pkg-config", "libssl-dev", "unzip", "xz-utils"):
+        assert pkg not in install, f"slim variant must not install {pkg!r}"
+    assert 'LABEL io.cangjie.slim="true"' in content
+
+
+def test_render_dockerfile_openeuler_slim_uses_minimal_deps() -> None:
+    content = render_dockerfile(
+        base_name="slim-openeuler-24.03",
+        base_image="openeuler/openeuler:24.03-lts-sp2",
+        base_family="openeuler",
+        channel="lts",
+        version="1.0.5",
+        arch="amd64",
+        source=_source(),
+        slim=True,
+    )
+    install = _extract_install_block(content, "dnf install")
+    for pkg in ("ca-certificates", "gcc", "glibc-devel", "openssl-libs"):
+        assert pkg in install
+    for pkg in ("gcc-c++", "git", "make", "pkgconfig", "openssl-devel", "unzip"):
+        assert pkg not in install, f"openeuler slim must not install {pkg!r}"
+    assert 'LABEL io.cangjie.slim="true"' in content
+
+
+def test_render_dockerfile_debian_full_uses_buildpack_deps() -> None:
+    content = render_dockerfile(
+        base_name="bookworm",
+        base_image="buildpack-deps:bookworm",
+        base_family="debian",
+        channel="lts",
+        version="1.0.5",
+        arch="amd64",
+        source=_source(),
+    )
+    assert 'LABEL io.cangjie.slim="false"' in content
+    assert "FROM buildpack-deps:bookworm" in content
+    # buildpack-deps already ships the dev toolchain, so the template must
+    # not emit an apt-get install step on top.
+    assert "apt-get install" not in content
+    assert "apt-get update" not in content
+    assert 'LABEL org.opencontainers.image.base.name="buildpack-deps:bookworm"' in content
 
 
 def test_render_dockerfile_rejects_arch_mismatch() -> None:

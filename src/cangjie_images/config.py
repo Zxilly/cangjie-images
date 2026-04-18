@@ -17,6 +17,7 @@ class BaseVariant:
     image: str
     family: BaseFamily
     default: bool = False
+    slim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,15 +43,28 @@ DOCKER_HUB_PAGE_SIZE = 100
 USER_AGENT = "cangjie-images/0.1.0"
 
 BASE_VARIANTS: tuple[BaseVariant, ...] = (
-    BaseVariant("bookworm", "debian:bookworm", "debian", default=True),
-    BaseVariant("slim-bookworm", "debian:bookworm-slim", "debian"),
-    BaseVariant("bullseye", "debian:bullseye", "debian"),
-    BaseVariant("slim-bullseye", "debian:bullseye-slim", "debian"),
-    BaseVariant("trixie", "debian:trixie", "debian"),
-    BaseVariant("slim-trixie", "debian:trixie-slim", "debian"),
+    # Full debian variants build on buildpack-deps (same pattern as
+    # rust-lang/docker-rust). buildpack-deps already ships gcc/g++/make/git/
+    # curl/pkg-config/libssl-dev/xz-utils/unzip/zip/ca-certificates, so the
+    # template installs zero additional apt packages on top.
+    BaseVariant("bookworm", "buildpack-deps:bookworm", "debian", default=True),
+    BaseVariant("slim-bookworm", "debian:bookworm-slim", "debian", slim=True),
+    BaseVariant("bullseye", "buildpack-deps:bullseye", "debian"),
+    BaseVariant("slim-bullseye", "debian:bullseye-slim", "debian", slim=True),
+    BaseVariant("trixie", "buildpack-deps:trixie", "debian"),
+    BaseVariant("slim-trixie", "debian:trixie-slim", "debian", slim=True),
     BaseVariant("openeuler-24.03", "openeuler/openeuler:24.03-lts-sp2", "openeuler"),
+    BaseVariant(
+        "slim-openeuler-24.03", "openeuler/openeuler:24.03-lts-sp2", "openeuler", slim=True
+    ),
     BaseVariant("openeuler-22.03", "openeuler/openeuler:22.03-lts-sp4", "openeuler"),
+    BaseVariant(
+        "slim-openeuler-22.03", "openeuler/openeuler:22.03-lts-sp4", "openeuler", slim=True
+    ),
     BaseVariant("openeuler-20.03", "openeuler/openeuler:20.03-lts-sp4", "openeuler"),
+    BaseVariant(
+        "slim-openeuler-20.03", "openeuler/openeuler:20.03-lts-sp4", "openeuler", slim=True
+    ),
 )
 
 ARCH_VARIANTS: tuple[ArchVariant, ...] = (
