@@ -27,7 +27,7 @@ FROM openeuler/openeuler:24.03-lts-sp2
 RUN <<'EOF'
 set -eux
 sed -i.upstream -E '/^baseurl=/ s|https?://repo\.openeuler\.org|https://mirror.freedif.org/openEuler|' /etc/yum.repos.d/*.repo
-dnf install -y \
+dnf install -y --setopt=max_parallel_downloads=20 \
       ca-certificates \
       gcc \
       glibc-devel \

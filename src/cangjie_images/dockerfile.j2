@@ -40,7 +40,7 @@ set -eux
 # Point dnf at the Berkeley mirror for the install; repo files are
 # restored afterwards so consumers of this image hit the upstream.
 sed -i.upstream -E '/^baseurl=/ s|https?://repo\.openeuler\.org|https://mirror.freedif.org/openEuler|' /etc/yum.repos.d/*.repo
-dnf install -y \
+dnf install -y --setopt=max_parallel_downloads=20 \
       {{ packages_block }}
 dnf clean all
 rm -rf /var/cache/dnf
