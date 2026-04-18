@@ -347,10 +347,14 @@ def slugify(value: str) -> str:
     return SLUG_RE.sub("-", value.lower()).strip("-")
 
 
-def _base_tag_names(base_name: str, *, default: bool, raw_tag: str) -> list[str]:
+def _base_tag_names(
+    base_name: str, *, default: bool, default_slim: bool, raw_tag: str
+) -> list[str]:
     tags = [f"{raw_tag}-{base_name}"]
     if default:
         tags.insert(0, raw_tag)
+    elif default_slim:
+        tags.insert(0, f"{raw_tag}-slim")
     return tags
 
 
@@ -360,6 +364,7 @@ def build_tags(
     version: str,
     base_name: str,
     default_base: bool,
+    default_slim: bool = False,
     latest_lts: str,
     latest_sts: str,
     minor_aliases: dict[str, tuple[str, ...]],
@@ -379,7 +384,14 @@ def build_tags(
 
     tags: list[str] = []
     for raw_tag in raw_tags:
-        tags.extend(_base_tag_names(base_name, default=default_base, raw_tag=raw_tag))
+        tags.extend(
+            _base_tag_names(
+                base_name,
+                default=default_base,
+                default_slim=default_slim,
+                raw_tag=raw_tag,
+            )
+        )
 
     return tuple(dict.fromkeys(tags))
 
@@ -568,6 +580,7 @@ def build_plan(
             version=version,
             base_name=base_name,
             default_base=base.default,
+            default_slim=base.default_slim,
             latest_lts=latest_lts,
             latest_sts=latest_sts,
             minor_aliases=minor_aliases,
@@ -620,6 +633,7 @@ def build_plan(
                     version=nightly_release_model.tag_name,
                     base_name=base.name,
                     default_base=base.default,
+                    default_slim=base.default_slim,
                     latest_lts=latest_lts,
                     latest_sts=latest_sts,
                     minor_aliases=minor_aliases,

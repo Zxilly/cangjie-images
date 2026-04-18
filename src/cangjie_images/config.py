@@ -18,6 +18,7 @@ class BaseVariant:
     family: BaseFamily
     default: bool = False
     slim: bool = False
+    default_slim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +49,9 @@ BASE_VARIANTS: tuple[BaseVariant, ...] = (
     # curl/pkg-config/libssl-dev/xz-utils/unzip/zip/ca-certificates, so the
     # template installs zero additional apt packages on top.
     BaseVariant("bookworm", "buildpack-deps:bookworm", "debian", default=True),
-    BaseVariant("slim-bookworm", "debian:bookworm-slim", "debian", slim=True),
+    BaseVariant(
+        "slim-bookworm", "debian:bookworm-slim", "debian", slim=True, default_slim=True
+    ),
     BaseVariant("bullseye", "buildpack-deps:bullseye", "debian"),
     BaseVariant("slim-bullseye", "debian:bullseye-slim", "debian", slim=True),
     BaseVariant("trixie", "buildpack-deps:trixie", "debian"),

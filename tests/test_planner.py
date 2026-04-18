@@ -157,6 +157,88 @@ def test_build_tags_for_default_lts_base() -> None:
     )
 
 
+def test_build_tags_for_default_slim_lts_base() -> None:
+    tags = build_tags(
+        channel="lts",
+        version="1.0.5",
+        base_name="slim-bookworm",
+        default_base=False,
+        default_slim=True,
+        latest_lts="1.0.5",
+        latest_sts="0.53.18",
+        minor_aliases={"1.0.5": ("1.0",)},
+    )
+    assert tags == (
+        "1.0.5-slim",
+        "1.0.5-slim-bookworm",
+        "1.0-slim",
+        "1.0-slim-bookworm",
+        "lts-slim",
+        "lts-slim-bookworm",
+        "latest-slim",
+        "latest-slim-bookworm",
+    )
+
+
+def test_build_tags_for_default_slim_sts_base() -> None:
+    tags = build_tags(
+        channel="sts",
+        version="0.53.18",
+        base_name="slim-bookworm",
+        default_base=False,
+        default_slim=True,
+        latest_lts="1.0.5",
+        latest_sts="0.53.18",
+        minor_aliases={"0.53.18": ("0.53",)},
+    )
+    assert tags == (
+        "0.53.18-slim",
+        "0.53.18-slim-bookworm",
+        "0.53-slim",
+        "0.53-slim-bookworm",
+        "sts-slim",
+        "sts-slim-bookworm",
+    )
+
+
+def test_build_tags_for_default_slim_nightly_base() -> None:
+    tags = build_tags(
+        channel="nightly",
+        version="1.1.0-alpha-20260419010042",
+        base_name="slim-bookworm",
+        default_base=False,
+        default_slim=True,
+        latest_lts="1.0.5",
+        latest_sts="0.53.18",
+        minor_aliases={},
+    )
+    assert tags == (
+        "nightly-1.1.0-alpha-20260419010042-slim",
+        "nightly-1.1.0-alpha-20260419010042-slim-bookworm",
+        "nightly-slim",
+        "nightly-slim-bookworm",
+    )
+
+
+def test_build_tags_for_non_default_slim_base_has_no_alias() -> None:
+    tags = build_tags(
+        channel="lts",
+        version="1.0.5",
+        base_name="slim-bullseye",
+        default_base=False,
+        default_slim=False,
+        latest_lts="1.0.5",
+        latest_sts="0.53.18",
+        minor_aliases={"1.0.5": ("1.0",)},
+    )
+    assert tags == (
+        "1.0.5-slim-bullseye",
+        "1.0-slim-bullseye",
+        "lts-slim-bullseye",
+        "latest-slim-bullseye",
+    )
+
+
 def test_build_plan_skips_release_when_all_tags_exist(tmp_path) -> None:
     _seed_versions(tmp_path)
     existing_tags = {
