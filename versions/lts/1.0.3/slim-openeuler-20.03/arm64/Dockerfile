@@ -26,7 +26,7 @@ EOF
 FROM openeuler/openeuler:20.03-lts-sp4
 RUN <<'EOF'
 set -eux
-sed -i.upstream -E 's|https?://repo\.openeuler\.org|https://mirrors.ocf.berkeley.edu/openeuler|g' /etc/yum.repos.d/*.repo
+sed -i.upstream -E '/^baseurl=/ s|https?://repo\.openeuler\.org|https://mirrors.ocf.berkeley.edu/openeuler|' /etc/yum.repos.d/*.repo
 dnf install -y \
       ca-certificates \
       gcc \

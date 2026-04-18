@@ -39,7 +39,7 @@ RUN <<'EOF'
 set -eux
 # Point dnf at the Berkeley mirror for the install; repo files are
 # restored afterwards so consumers of this image hit the upstream.
-sed -i.upstream -E 's|https?://repo\.openeuler\.org|https://mirrors.ocf.berkeley.edu/openeuler|g' /etc/yum.repos.d/*.repo
+sed -i.upstream -E '/^baseurl=/ s|https?://repo\.openeuler\.org|https://mirrors.ocf.berkeley.edu/openeuler|' /etc/yum.repos.d/*.repo
 dnf install -y \
       {{ packages_block }}
 dnf clean all
