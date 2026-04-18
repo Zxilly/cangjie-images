@@ -94,13 +94,16 @@ def _get_template() -> Template:
     return _template
 
 
-def _quote_env_value(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+# Dockerfile ENV double-quote escaping. Scalar values must additionally
+# escape `$` so literal dollar signs aren't interpreted as ARG/ENV refs;
+# path-like values keep `$PATH`/`$LD_LIBRARY_PATH` unescaped so they
+# expand against the base image's inherited value at build time.
+_SCALAR_ESCAPE = str.maketrans({"\\": r"\\", '"': r"\"", "$": r"\$"})
+_PATH_ESCAPE = str.maketrans({"\\": r"\\", '"': r"\""})
 
 
 def _format_scalar_env(key: str, value: str) -> str:
-    escaped = _quote_env_value(value).replace("$", "\\$")
-    return f'ENV {key}="{escaped}"'
+    return f'ENV {key}="{value.translate(_SCALAR_ESCAPE)}"'
 
 
 def _format_path_env(key: str, diff: PathListDiff) -> str:
@@ -110,7 +113,7 @@ def _format_path_env(key: str, diff: PathListDiff) -> str:
     parts.append(f"${key}")
     if diff.append:
         parts.append(":".join(diff.append))
-    return f'ENV {key}="{_quote_env_value(":".join(parts))}"'
+    return f'ENV {key}="{":".join(parts).translate(_PATH_ESCAPE)}"'
 
 
 def _env_lines(env_diff: EnvDiff) -> list[str]:
