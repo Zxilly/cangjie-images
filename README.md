@@ -1,4 +1,4 @@
-# 关于这个仓库
+# cangjie-images
 
 [![CI](https://github.com/Zxilly/cangjie-images/actions/workflows/ci.yml/badge.svg)](https://github.com/Zxilly/cangjie-images/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
