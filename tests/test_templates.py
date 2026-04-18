@@ -37,7 +37,7 @@ def test_render_dockerfile_single_arch_is_linear() -> None:
     assert "apt-get install -y --no-install-recommends" in content
     assert 'ENV CANGJIE_HOME="/opt/cangjie"' in content
     assert (
-        'ENV LD_LIBRARY_PATH='
+        "ENV LD_LIBRARY_PATH="
         '"/opt/cangjie/runtime/lib/linux_x86_64_cjnative:/opt/cangjie/tools/lib"' in content
     )
     assert 'ENV PATH="/opt/cangjie/bin:/opt/cangjie/tools/bin:$PATH:/root/.cjpm/bin"' in content
@@ -89,10 +89,8 @@ def test_render_dockerfile_emits_oci_metadata_labels() -> None:
         'LABEL org.opencontainers.image.source="https://github.com/Zxilly/cangjie-images"'
         in content
     )
-    assert 'LABEL org.opencontainers.image.licenses="Apache-2.0"' in content
-    assert (
-        'LABEL org.opencontainers.image.base.name="openeuler/openeuler:24.03-lts-sp2"' in content
-    )
+    assert 'LABEL org.opencontainers.image.licenses="MIT"' in content
+    assert 'LABEL org.opencontainers.image.base.name="openeuler/openeuler:24.03-lts-sp2"' in content
     assert 'LABEL io.cangjie.base="openeuler-24.03"' in content
     assert 'LABEL io.cangjie.base.family="openeuler"' in content
     assert 'LABEL io.cangjie.backend="cjnative"' in content

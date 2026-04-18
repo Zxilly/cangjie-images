@@ -4,7 +4,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cangjie_images.config import ARCH_VARIANTS, BASE_VARIANTS, STABLE_CHANNELS, Arch, StableChannel
+from cangjie_images.config import (
+    ARCH_VARIANTS,
+    BASE_VARIANTS,
+    STABLE_CHANNELS,
+    Arch,
+    BaseVariant,
+    StableChannel,
+)
 from cangjie_images.models import StableManifest
 from cangjie_images.planner import fetch_manifest
 from cangjie_images.prepare import capture_sources
@@ -58,19 +65,22 @@ def generate(
     Existing files are left alone unless ``force`` or ``force_version`` match.
     Nightly is not part of this flow; nightly still uses the dynamic pipeline.
     """
+    manifest_model: StableManifest
     if manifest is None:
-        manifest = fetch_manifest()
-    elif not isinstance(manifest, StableManifest):
-        manifest = StableManifest.model_validate(manifest)
+        manifest_model = fetch_manifest()
+    elif isinstance(manifest, StableManifest):
+        manifest_model = manifest
+    else:
+        manifest_model = StableManifest.model_validate(manifest)
 
     result = GenerationResult()
 
     for channel_name in STABLE_CHANNELS:
-        channel = manifest.channels.get(channel_name)
+        channel = manifest_model.channels.get(channel_name)
         if channel is None:
             continue
         for version, platforms in channel.versions.items():
-            pending: list[tuple[Any, GenerationTarget]] = []
+            pending: list[tuple[BaseVariant, GenerationTarget]] = []
             for base in BASE_VARIANTS:
                 for arch_variant in ARCH_VARIANTS:
                     target = GenerationTarget(

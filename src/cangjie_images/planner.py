@@ -25,6 +25,7 @@ from cangjie_images.config import (
     STABLE_MANIFEST_URL,
     Arch,
     BaseFamily,
+    BaseVariant,
     Channel,
     StableChannel,
 )
@@ -308,12 +309,15 @@ def _compute_stable_heads(
     return latest_lts, latest_sts, minor_aliases
 
 
-def nightly_download_info(release: NightlyRelease | dict[str, Any]) -> dict[str, PlatformArtifact]:
-    if not isinstance(release, NightlyRelease):
-        release = NightlyRelease.model_validate(release)
+def nightly_download_info(
+    release: NightlyRelease | Mapping[str, Any],
+) -> dict[str, PlatformArtifact]:
+    release_model = (
+        release if isinstance(release, NightlyRelease) else NightlyRelease.model_validate(release)
+    )
 
-    version = release.tag_name
-    assets_by_name = {asset.name: asset.browser_download_url for asset in release.assets}
+    version = release_model.tag_name
+    assets_by_name = {asset.name: asset.browser_download_url for asset in release_model.assets}
     info: dict[str, PlatformArtifact] = {}
     for arch in ARCH_VARIANTS:
         filename = f"cangjie-sdk-linux-{arch.nightly_arch}-{version}.tar.gz"
@@ -455,7 +459,7 @@ def _render_nightly_contexts(
     nightly_release: NightlyRelease,
     platforms: dict[str, PlatformArtifact],
     output_root: Path,
-    bases: tuple[Any, ...] | None = None,
+    bases: tuple[BaseVariant, ...] | None = None,
 ) -> dict[tuple[str, Arch], Path]:
     """Render nightly Dockerfiles per (base, arch) under ``output_root``.
 
@@ -502,7 +506,7 @@ def build_plan(
     existing_tags: AbstractSet[str]
     | Mapping[str, AbstractSet[str] | Mapping[str, str]]
     | None = None,
-    nightly_release: NightlyRelease | dict[str, Any] | None = None,
+    nightly_release: NightlyRelease | Mapping[str, Any] | None = None,
     skipped_nightly_reason: str | None = None,
     nightly_context_root: Path | None = None,
 ) -> PlanResult:
@@ -517,11 +521,17 @@ def build_plan(
         else fetch_existing_tags(image_name)
     )
 
-    if nightly_release is not None and not isinstance(nightly_release, NightlyRelease):
-        nightly_release = NightlyRelease.model_validate(nightly_release)
-    if include_nightly and nightly_release is None and skipped_nightly_reason is None:
-        nightly_release, skipped_nightly_reason = fetch_latest_nightly(include_nightly=True)
-    nightly_version = nightly_release.tag_name if nightly_release else None
+    nightly_release_model: NightlyRelease | None
+    if nightly_release is None:
+        nightly_release_model = None
+    elif isinstance(nightly_release, NightlyRelease):
+        nightly_release_model = nightly_release
+    else:
+        nightly_release_model = NightlyRelease.model_validate(nightly_release)
+
+    if include_nightly and nightly_release_model is None and skipped_nightly_reason is None:
+        nightly_release_model, skipped_nightly_reason = fetch_latest_nightly(include_nightly=True)
+    nightly_version = nightly_release_model.tag_name if nightly_release_model else None
 
     committed = scan_committed_versions(versions_root)
     latest_lts, latest_sts, minor_aliases = _compute_stable_heads(committed)
@@ -577,36 +587,36 @@ def build_plan(
     # Nightly: dynamic render at plan time, only if at least one base needs
     # a build (avoids a ~1GB SDK download when every nightly tag already
     # matches what Docker Hub has).
-    if nightly_release is not None:
-        platforms = nightly_download_info(nightly_release)
+    if nightly_release_model is not None:
+        platforms = nightly_download_info(nightly_release_model)
         if not platforms:
             skipped_nightly_reason = (
                 skipped_nightly_reason
-                or f"nightly release {nightly_release.tag_name} has no supported assets"
+                or f"nightly release {nightly_release_model.tag_name} has no supported assets"
             )
         else:
             nightly_arches: tuple[Arch, ...] = tuple(
                 arch.name for arch in ARCH_VARIANTS if arch.manifest_key in platforms
             )
-            pending: list[tuple[Any, tuple[str, ...], str]] = []
+            pending: list[tuple[BaseVariant, tuple[str, ...], str]] = []
             for base in BASE_VARIANTS:
                 tags = build_tags(
                     channel="nightly",
-                    version=nightly_release.tag_name,
+                    version=nightly_release_model.tag_name,
                     base_name=base.name,
                     default_base=base.default,
                     latest_lts=latest_lts,
                     latest_sts=latest_sts,
                     minor_aliases=minor_aliases,
                 )
-                release_id = slugify(f"nightly-{nightly_release.tag_name}-{base.name}")
+                release_id = slugify(f"nightly-{nightly_release_model.tag_name}-{base.name}")
                 if not force and _is_release_complete(tags, nightly_arches, existing_tags):
                     continue
                 pending.append((base, tags, release_id))
 
             if pending:
                 contexts = _render_nightly_contexts(
-                    nightly_release,
+                    nightly_release_model,
                     platforms,
                     nightly_context_root,
                     bases=tuple(base for base, _, _ in pending),
@@ -614,7 +624,7 @@ def build_plan(
                 if not contexts:
                     skipped_nightly_reason = (
                         skipped_nightly_reason
-                        or f"nightly release {nightly_release.tag_name} has no capturable SDK"
+                        or f"nightly release {nightly_release_model.tag_name} has no capturable SDK"
                     )
                 else:
                     for base, tags, release_id in pending:
@@ -628,7 +638,7 @@ def build_plan(
                                 _plan_build_entry(
                                     release_id=release_id,
                                     channel="nightly",
-                                    version=nightly_release.tag_name,
+                                    version=nightly_release_model.tag_name,
                                     base_name=base.name,
                                     base_family=base.family,
                                     base_image=base.image,
@@ -640,7 +650,7 @@ def build_plan(
                             PlannedRelease(
                                 release_id=release_id,
                                 channel="nightly",
-                                version=nightly_release.tag_name,
+                                version=nightly_release_model.tag_name,
                                 base=base.name,
                                 tags=tags,
                                 arches=present_arches,

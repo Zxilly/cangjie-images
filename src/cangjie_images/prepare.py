@@ -67,9 +67,7 @@ def detect_backend(sdk_home: Path, native_lib_token: str) -> str:
         if entry.is_dir() and entry.name.startswith(prefix)
     ]
     if not candidates:
-        raise RuntimeError(
-            f"no {prefix}* subdir under {runtime_lib}; cannot determine backend"
-        )
+        raise RuntimeError(f"no {prefix}* subdir under {runtime_lib}; cannot determine backend")
     if len(candidates) > 1:
         raise RuntimeError(
             f"multiple backends found under {runtime_lib}: {candidates}; expected one"
@@ -127,9 +125,7 @@ def capture_sdk(
     return computed_sha, backend
 
 
-def _capture_one(
-    arch: ArchVariant, artifact: PlatformArtifact, run_smoke_test: bool
-) -> ArchSource:
+def _capture_one(arch: ArchVariant, artifact: PlatformArtifact, run_smoke_test: bool) -> ArchSource:
     with tempfile.TemporaryDirectory(prefix="cangjie-capture-") as tmp:
         sha, backend = capture_sdk(
             archive_url=artifact.url,
@@ -162,7 +158,6 @@ def capture_sources(
 
     with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
         futures = [
-            executor.submit(_capture_one, arch, artifact, run_smoke_test)
-            for arch, artifact in jobs
+            executor.submit(_capture_one, arch, artifact, run_smoke_test) for arch, artifact in jobs
         ]
         return [f.result() for f in futures]
