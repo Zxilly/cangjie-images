@@ -11,14 +11,34 @@
 
 # 支持的 tag 及对应 Dockerfile
 
-稳定版 Dockerfile 位于 [`versions/`](https://github.com/Zxilly/cangjie-images/tree/master/versions)，nightly Dockerfile 在发布阶段按需生成。
+稳定版 Dockerfile 位于 [`versions/lts/`](https://github.com/Zxilly/cangjie-images/tree/master/versions/lts) 与 [`versions/sts/`](https://github.com/Zxilly/cangjie-images/tree/master/versions/sts)，目录结构均为 `versions/<channel>/<version>/<base>/<arch>/Dockerfile`；nightly Dockerfile 在发布阶段按需生成。
 
--	`1.0.5`、`1.0.5-bookworm`、`1.0`、`lts`、`latest`
--	`1.0.5-slim-bookworm`、`lts-slim-bookworm`、`lts-slim`
+-	`1.0.5`、`1.0.5-bookworm`、`1.0`、`1.0-bookworm`、`lts`、`lts-bookworm`、`latest`、`latest-bookworm`
+-	`1.0.5-slim`、`1.0.5-slim-bookworm`、`1.0-slim`、`1.0-slim-bookworm`、`lts-slim`、`lts-slim-bookworm`、`latest-slim`、`latest-slim-bookworm`
 -	`1.0.5-bullseye`、`1.0.5-trixie`
 -	`1.0.5-openeuler-24.03`、`1.0.5-openeuler-22.03`、`1.0.5-openeuler-20.03`
 -	`1.0.5-slim-openeuler-24.03`、`1.0.5-slim-openeuler-22.03`、`1.0.5-slim-openeuler-20.03`
--	`nightly`、`nightly-<version>`、`nightly-<version>-<base>`
+-	`0.53.18`、`0.53.18-bookworm`、`0.53`、`0.53-bookworm`、`sts`、`sts-bookworm`
+-	`0.53.18-slim`、`0.53.18-slim-bookworm`、`0.53-slim`、`0.53-slim-bookworm`、`sts-slim`、`sts-slim-bookworm`
+-	`0.53.18-bullseye`、`0.53.18-trixie`
+-	`0.53.18-openeuler-24.03`、`0.53.18-openeuler-22.03`、`0.53.18-openeuler-20.03`
+-	`0.53.18-slim-openeuler-24.03`、`0.53.18-slim-openeuler-22.03`、`0.53.18-slim-openeuler-20.03`
+-	`1.1.0-beta.25`、`1.1.0-beta.25-bookworm`
+-	`1.1.0-beta.25-slim`、`1.1.0-beta.25-slim-bookworm`
+-	`1.1.0-beta.25-bullseye`、`1.1.0-beta.25-trixie`
+-	`1.1.0-beta.25-openeuler-24.03`、`1.1.0-beta.25-openeuler-22.03`、`1.1.0-beta.25-openeuler-20.03`
+-	`1.1.0-beta.25-slim-openeuler-24.03`、`1.1.0-beta.25-slim-openeuler-22.03`、`1.1.0-beta.25-slim-openeuler-20.03`
+-	`nightly`、`nightly-<version>`、`nightly-<base>`、`nightly-<version>-<base>`
+
+别名 tag：
+
+-	`latest`、`latest-bookworm`：指向当前最新 `lts` 版本的默认 `bookworm` 变体。
+-	`latest-slim`、`latest-slim-bookworm`：指向当前最新 `lts` 版本的 `slim-bookworm` 变体。
+-	`lts`、`lts-bookworm`：指向当前最新 LTS 版本的默认 `bookworm` 变体。
+-	`lts-slim`、`lts-slim-bookworm`：指向当前最新 LTS 版本的 `slim-bookworm` 变体。
+-	`sts`、`sts-bookworm`：指向当前最新 STS 稳定版本的默认 `bookworm` 变体。
+-	`sts-slim`、`sts-slim-bookworm`：指向当前最新 STS 稳定版本的 `slim-bookworm` 变体。
+-	STS beta 版本使用显式版本 tag，例如 `1.1.0-beta.25`、`1.1.0-beta.25-bookworm`、`1.1.0-beta.25-slim`。
 
 # 什么是仓颉？
 
